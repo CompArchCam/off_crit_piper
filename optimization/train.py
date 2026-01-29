@@ -4,9 +4,17 @@ import os
 import time
 import random
 import resource
+import logging
 from smac import HyperparameterOptimizationFacade, Scenario
 from pspace import parse_pspace, config_to_file
 from cbp_interface import run_cbp, parse_cbp_output, calculate_cost
+
+# Configure logging to only show warnings and errors
+logging.basicConfig(
+    level=logging.WARNING,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Configuration
 PSPACE_FILE = 'config.pspace'
@@ -31,7 +39,7 @@ except Exception:
 try:
     template, config_space = parse_pspace(PSPACE_FILE)
 except Exception as e:
-    print(f"Failed to parse pspace file: {e}")
+    logger.error(f"Failed to parse pspace file: {e}")
     exit(1)
 
 def evaluate(config, seed: int = 0) -> float:
@@ -56,21 +64,21 @@ def evaluate(config, seed: int = 0) -> float:
                 stdout, stderr, returncode = run_cbp(config_path, trace_path, timeout=600)
                 
                 if returncode != 0:
-                    print(f"CBP failed on {trace_path}. Code: {returncode}")
-                    # print(stderr) 
+                    logger.error(f"CBP failed on {trace_path}. Code: {returncode}")
+                    # logger.debug(stderr) 
                     return 1e9 # High cost for failure
 
                 combined, tage = parse_cbp_output(stdout)
                 
                 if combined is None or tage is None:
-                    print(f"Failed to parse output on {trace_path}")
+                    logger.error(f"Failed to parse output on {trace_path}")
                     return 1e9
                 
                 cost = calculate_cost(combined, tage)
                 costs.append(cost)
 
             except Exception as e:
-                print(f"Exception running trace {trace_path}: {e}")
+                logger.error(f"Exception running trace {trace_path}: {e}")
                 return 1e9
             
         if not costs:
@@ -79,15 +87,14 @@ def evaluate(config, seed: int = 0) -> float:
         return sum(costs) / len(costs)
 
     except Exception as e:
-        print(f"Evaluation failed: {e}")
+        logger.error(f"Evaluation failed: {e}")
         return 1e9
     finally:
         if os.path.exists(config_path):
             os.remove(config_path)
 
 if __name__ == '__main__':
-    print(f"Starting optimization with {N_WORKERS} workers...")
-    print(f"Traces: {TRACES}")
+    # Removed informational prints to reduce contention
     
     scenario = Scenario(
         configspace=config_space,
@@ -101,8 +108,5 @@ if __name__ == '__main__':
     incumbent = smac.optimize()
 
     # Save Best Result
-    print("\noptimization finished.")
     final_cost = evaluate(incumbent)
-    print(f"Best cost: {final_cost:.4f}")
     config_to_file(template, incumbent, OUTPUT_FILE)
-    print(f"Saved optimized config to: {OUTPUT_FILE}")
