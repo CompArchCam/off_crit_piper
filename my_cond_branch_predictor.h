@@ -129,8 +129,14 @@ class SampleCondPredictor
                                 index_manager.add_feature(std::make_unique<GHistFeature>(args));
                             } else if (type == "GPath") {
                                 index_manager.add_feature(std::make_unique<GPathFeature>(args));
+                            } else if (type == "GPattern") {
+                                index_manager.add_feature(std::make_unique<GPatternFeature>(args));
                             } else if (type == "LHist") {
                                 index_manager.add_feature(std::make_unique<LHistFeature>(args));
+                            } else if (type == "LPattern") {
+                                index_manager.add_feature(std::make_unique<LPatternFeature>(args));
+                            } else if (type == "Recency") {
+                                index_manager.add_feature(std::make_unique<RecencyFeature>(args));
                             } else if (type == "RecencyPos") {
                                 index_manager.add_feature(std::make_unique<RecencyPosFeature>(args));
                             } else if (type == "IMLI") {
@@ -139,6 +145,10 @@ class SampleCondPredictor
                                 index_manager.add_feature(std::make_unique<BlurryPathFeature>(args));
                             } else if (type == "ReturnStackHist") {
                                 index_manager.add_feature(std::make_unique<ReturnStackHistFeature>(args));
+                            } else if (type == "BrIMLI") {
+                                index_manager.add_feature(std::make_unique<BrIMLIFeature>(args));
+                            } else if (type == "TaIMLI") {
+                                index_manager.add_feature(std::make_unique<TaIMLIFeature>(args));
                             } else {
                                 std::cerr << "Unknown feature type: " << type << std::endl;
                                 exit(1);
