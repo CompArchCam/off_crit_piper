@@ -5,6 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <deque>
+#include "../tage_prediction.h"
 
 struct ActiveWeight {
     uint64_t hash;  // The raw feature index/hash provided by GetIndex
@@ -28,6 +29,19 @@ private:
     std::vector<TableState> tables;
     std::deque<ActiveWeight> nonzero_weights;
     
+    // Hard Branch Table (HBT) for detecting hard-to-predict branches
+    struct HBTEntry {
+        uint8_t misp_counter;  // 5-bit saturating counter (0-31)
+        uint64_t tag;          // Partial PC tag for identification
+        bool valid;            // Entry validity flag
+        
+        HBTEntry() : misp_counter(0), tag(0), valid(false) {}
+    };
+    
+    std::vector<HBTEntry> hbt;
+    uint64_t retired_branches;
+    static const size_t HBT_SIZE = 1 << 14;  // 16K entries
+    
     float alpha;
     float beta;
     float l1;
@@ -37,10 +51,67 @@ private:
         if (std::abs(z) <= l1) return 0.0f;
         return -(z - (z > 0 ? 1.0f : -1.0f) * l1) / (((beta + std::sqrt(n)) / alpha) + l2);
     }
+    
+    // HBT helper methods
+    uint64_t hash_hbt_index(uint64_t pc) const {
+        return pc & (HBT_SIZE - 1);
+    }
+    
+    uint64_t compute_tag(uint64_t pc) const {
+        // Use upper bits of PC as tag
+        return (pc >> 14) & 0xFFFF;
+    }
+    
+    bool is_hard_to_predict(uint64_t pc) const {
+        size_t idx = hash_hbt_index(pc);
+        const auto& entry = hbt[idx];
+        if (!entry.valid || entry.tag != compute_tag(pc)) return false;
+        // Counter saturates at 31 (5 bits)
+        return entry.misp_counter >= 31;
+    }
+    
+    void update_hbt(uint64_t pc, bool mispredicted, bool hit_in_last) {
+        // Only allocate/update if branch hit in last history table
+
+        if (!mispredicted) return;
+        
+        size_t idx = hash_hbt_index(pc);
+        auto& entry = hbt[idx];
+        uint64_t tag = compute_tag(pc);
+        
+        // Allocate new entry or update existing
+        if (entry.tag != tag) {
+            // Only allocate if counter is 0 (allows overwriting old entries)
+            if (entry.misp_counter == 0 && hit_in_last) {
+                entry.valid = true;
+                entry.tag = tag;
+                entry.misp_counter = 1;
+            }
+        } else {
+            // Saturate at 31
+            if (entry.misp_counter < 31) entry.misp_counter++;
+        }
+    }
+    
+    void apply_leaky_bucket() {
+        // Decrement all counters by min(counter, 15)
+        for (auto& entry : hbt) {
+            if (entry.valid && entry.misp_counter > 0) {
+                uint8_t decrement = std::min(static_cast<uint8_t>(15), entry.misp_counter);
+                entry.misp_counter -= decrement;
+                // Invalidate entry if counter reaches 0
+                if (entry.misp_counter == 0) {
+                    entry.valid = false;
+                }
+            }
+        }
+    }
 
 public:
     FTRL(size_t num_features, float _alpha, float _beta, float _l1, float _l2)
-        : alpha(_alpha), beta(_beta), l1(_l1), l2(_l2)
+        : alpha(_alpha), beta(_beta), l1(_l1), l2(_l2),
+          hbt(HBT_SIZE),
+          retired_branches(0)
     {
         if (alpha <= 0.0f) throw std::runtime_error("FTRL alpha must be > 0");
         tables.reserve(num_features);
@@ -52,7 +123,26 @@ public:
     }
     
     // Update weights based on indices provided by IndexManager
-    void update(const std::vector<uint64_t>& indices, float pred, bool actual, uint64_t cycle) {
+    // Now requires TagePrediction for feedback
+    void update(const std::vector<uint64_t>& indices, float pred, bool actual, uint64_t cycle, uint64_t pc, const TagePrediction& tage_pred) {
+        
+        // Track retired branches for leaky bucket mechanism
+        retired_branches++;
+        
+        // Apply leaky bucket every 1000 retired branches
+        if (retired_branches % 1000 == 0) {
+            apply_leaky_bucket();
+        }
+        
+        // Update Hard Branch Table
+        bool mispredicted = (tage_pred.prediction != actual);
+        update_hbt(pc, mispredicted, tage_pred.hit_in_last_history_table);
+        
+        // Only update weights if branch is hard-to-predict (counter saturated)
+        if (!is_hard_to_predict(pc)) {
+            return;
+        }
+
         float g = pred - (actual ? 1.0f : 0.0f);
         float g2 = g * g;
         
@@ -126,6 +216,7 @@ public:
             total += t.z_table.size() * sizeof(float);
             total += t.n_table.size() * sizeof(float);
         }
+        total += hbt.size() * sizeof(HBTEntry);
         return total;
     }
 };

@@ -454,6 +454,8 @@ int predictorsize ()
 // There are a couple of other hooks that aren't used in the current implementation, but are available to exploit:
 // * notify_instr_decode 
 // * notify_instr_commit
+#include "tage_prediction.h"
+
 class CBP2016_TAGE_SC_L
 {
     public:
@@ -1022,26 +1024,30 @@ class CBP2016_TAGE_SC_L
             return (pred_inter + (((HitBank+1)/4)<<4) + (HighConf<<1) + (LowConf <<2) +((AltBank!=0)<<3)+ ((PC^(PC>>2))<<7)) & ((1<<LOGBIAS) -1);
         }
 
-        bool predict (uint64_t seq_no, uint8_t piece, UINT64 PC)
+        TagePrediction predict (uint64_t seq_no, uint8_t piece, UINT64 PC)
         {
             // checkpoint current hist
             pred_time_histories.emplace(get_unique_inst_id(seq_no, piece), active_hist);
-            const bool pred_taken = predict_using_given_hist(seq_no, piece, PC, active_hist, true/*pred_time_predict*/);
-            return pred_taken;
+            const TagePrediction pred = predict_using_given_hist(seq_no, piece, PC, active_hist, true/*pred_time_predict*/);
+            return pred;
         }
 
-        bool predict_using_given_hist (uint64_t seq_no, uint8_t piece, UINT64 PC, const cbp_hist_t& hist_to_use, const bool pred_time_predict)
+        TagePrediction predict_using_given_hist (uint64_t seq_no, uint8_t piece, UINT64 PC, const cbp_hist_t& hist_to_use, const bool pred_time_predict)
         {
             // computes the TAGE table addresses and the partial tags
             Tagepred (PC, hist_to_use);
             bool pred_taken = tage_pred;
 #ifndef SC
-            return (tage_pred);
+            return {tage_pred, get_confidence_level(), HitBank == NHIST};
 #endif
 
+            bool loop_triggered = false;
 #ifdef LOOPPREDICTOR
             predloop = getloop (PC, hist_to_use);   // loop prediction
-            pred_taken = ((hist_to_use.WITHLOOP >= 0) && (LVALID)) ? predloop : pred_taken;
+            if ((hist_to_use.WITHLOOP >= 0) && (LVALID)) {
+                pred_taken = predloop;
+                loop_triggered = true;
+            }
 #endif
             pred_inter = pred_taken;
 
@@ -1093,34 +1099,54 @@ class CBP2016_TAGE_SC_L
 #endif
                 ;
 
+            int confidence = get_confidence_level();
+            if (loop_triggered) confidence = 2;
+
             //Minimal benefit in trying to avoid accuracy loss on low confidence SC prediction and  high/medium confidence on TAGE
             // but just uses 2 counters 0.3 % MPKI reduction
             if (pred_inter != SCPRED)
             {
                 //Choser uses TAGE confidence and |LSUM|
                 pred_taken = SCPRED;
+                bool reverted = false;
+
                 if (HighConf)
                 {
                     if ((abs (LSUM) < THRES / 4))
                     {
                         pred_taken = pred_inter;
+                        reverted = true;
                     }
 
                     else if ((abs (LSUM) < THRES / 2))
                     {
-                        pred_taken = (SecondH < 0) ? SCPRED : pred_inter;
+                        //pred_taken = (SecondH < 0) ? SCPRED : pred_inter;
+                         if (SecondH >= 0) {
+                            pred_taken = pred_inter;
+                            reverted = true;
+                        }
                     }
                 }
 
                 if (MedConf)
                     if ((abs (LSUM) < THRES / 4))
                     {
-                        pred_taken = (FirstH < 0) ? SCPRED : pred_inter;
+                        //pred_taken = (FirstH < 0) ? SCPRED : pred_inter;
+                        if (FirstH >= 0) {
+                             pred_taken = pred_inter;
+                             reverted = true;
+                        }
                     }
+                
+                if (!reverted) {
+                     if (abs(LSUM) < THRES / 4) confidence = 0;
+                     else if (abs(LSUM) < THRES / 2) confidence = 1;
+                     else confidence = 2;
+                }
 
             }
 
-            return pred_taken;
+            return {pred_taken, confidence, HitBank == NHIST};
         }
 
 
@@ -1240,7 +1266,8 @@ class CBP2016_TAGE_SC_L
         {
             const auto pred_hist_key = get_unique_inst_id(seq_no, piece);
             const auto& pred_time_history = pred_time_histories.at(pred_hist_key);
-            const bool pred_taken = predict_using_given_hist(seq_no, piece, PC, pred_time_history, false/*pred_time_predict*/);
+            const auto tage_prediction = predict_using_given_hist(seq_no, piece, PC, pred_time_history, false/*pred_time_predict*/);
+            const bool pred_taken = tage_prediction.prediction;
             //if(pred_taken != predDir)
             //{
             //    std::cout<<"id:"<<seq_no<<" PC:0x"<<std::hex<<PC<<std::dec<<" resolveDir:"<<resolveDir<<" pred_dir_at_pred:"<<predDir<<" pred_dir_at_update:"<<pred_taken<<std::endl;

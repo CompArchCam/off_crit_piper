@@ -64,7 +64,7 @@ public:
     void print_performance() const {
         uint64_t tage_misp = total_branches - tage_correct;
         uint64_t combined_misp = total_branches - combined_correct;
-        printf("ReferenceMispred/Mispred: %llu/%llu\n", combined_misp, tage_misp);
+        printf("Combined Misp/Tage Misp: %llu/%llu\n", combined_misp, tage_misp);
     }
 };
 
@@ -81,7 +81,7 @@ class SampleCondPredictor
         // State tracking
         struct HistoryEntry {
             PredState state;
-            bool tage_pred;
+            TagePrediction tage_pred;
             bool combined_pred;
             float fsc_sum;
         };
@@ -180,7 +180,7 @@ class SampleCondPredictor
             return (seq_no << 4) | (piece & 0x000F);
         }
 
-        bool predict (uint64_t seq_no, uint8_t piece, uint64_t PC, const bool tage_pred, const int confidence)
+        bool predict (uint64_t seq_no, uint8_t piece, uint64_t PC, const TagePrediction& tage_pred)
         {
             // 1. Get Indices
             std::vector<uint64_t> indices;
@@ -191,11 +191,12 @@ class SampleCondPredictor
             
             // 3. Get Tage Signed Weight
             float tage_weight = 0.0f;
-            float sign = tage_pred ? 1.0f : -1.0f;
+            float sign = tage_pred.prediction ? 1.0f : -1.0f;
+            int confidence = tage_pred.confidence;
             
-            if (confidence == 2) tage_weight = 1.0f;       // High
-            else if (confidence == 1) tage_weight = 0.5f;  // Med
-            else tage_weight = 0.1f;                       // Low
+            if (confidence == 2) tage_weight = 0.9f;       // High
+            else if (confidence == 1) tage_weight = 0.75f;  // Med
+            else tage_weight = 0.5f;                       // Low
             
             tage_weight *= sign;
             
@@ -238,13 +239,13 @@ class SampleCondPredictor
             const auto& state = entry.state;
             
             // Update Debugger
-            debugger.update(entry.tage_pred, entry.combined_pred, resolveDir);
+            debugger.update(entry.tage_pred.prediction, entry.combined_pred, resolveDir);
             
             // Train FTRL (Update weights in full model)
             // Use the indices we captured at prediction time
             // User request: "return the prob as 1.0f / (1.0f + std::exp(-dot)); as the pred float instead of this predDir ? 1.0f : 0.0f"
             float prob = 1.0f / (1.0f + std::exp(-state.sum));
-            ftrl->update(state.indices, prob, resolveDir, cycle);
+            ftrl->update(state.indices, prob, resolveDir, cycle, PC, entry.tage_pred);
             
             // If FSC was incorrect, zero out its weights so FTRL can refresh them
             bool fsc_pred_dir = (entry.fsc_sum >= 0.0f);

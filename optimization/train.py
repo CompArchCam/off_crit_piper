@@ -53,7 +53,7 @@ def evaluate(config, seed: int = 0) -> float:
         
         for trace_path in sampled_traces:
             try:
-                stdout, stderr, returncode = run_cbp(config_path, trace_path, timeout=60)
+                stdout, stderr, returncode = run_cbp(config_path, trace_path, timeout=600)
                 
                 if returncode != 0:
                     print(f"CBP failed on {trace_path}. Code: {returncode}")
