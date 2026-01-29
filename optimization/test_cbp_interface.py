@@ -10,7 +10,7 @@ class TestCBPInterface(unittest.TestCase):
     def test_parse_output_valid(self):
         output = """
         Some unrelated text...
-        ReferenceMispred/Mispred: 1234/5678
+        Combined Misp/Tage Misp: 1234/5678
         More text...
         """
         combined, tage = parse_cbp_output(output)
