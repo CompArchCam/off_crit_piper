@@ -1,0 +1,14 @@
+ftrl {float 0.1 2.0} {float 0.1 2.0} {float 0.0 5.0} {float 0.0 5.0}
+features
+{optional ENABLE_PC_0 PC}
+{optional ENABLE_GHIST_0 GHist {int 10 100}}
+{optional ENABLE_GHIST_1 GHist {int 20 200}}
+{optional ENABLE_GHIST_2 GHist {int 40 400}}
+{optional ENABLE_GPATH_0 GPath {int 10 60}}
+{optional ENABLE_GPATH_1 GPath {int 20 120}}
+{optional ENABLE_LHIST_0 LHist {int 4 64}}
+{optional ENABLE_RECENCY_POS_0 RecencyPos {int 4 64}}
+{optional ENABLE_IMLI_FORWARD_0 IMLI forward}
+{optional ENABLE_IMLI_BACKWARD_0 IMLI backward}
+{optional ENABLE_BLURRY_PATH_0 BlurryPath {int 2 16}}
+{optional ENABLE_RETURN_STACK_HIST_0 ReturnStackHist {int 4 32}}

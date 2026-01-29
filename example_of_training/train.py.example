@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+import re
+import subprocess
+import tempfile
+import os
+import time
+import random
+import resource
+import csv
+from smac import HyperparameterOptimizationFacade, Scenario
+from pspace import parse_pspace, config_to_file
+
+TRACES = ['fp_8_trace', 'int_1_trace', 'int_0_trace']
+TRACE_PER_RUN = 3
+
+PSPACE_FILE = 'config.pspace'
+TRACE_DIR = '../cbp2025_full_traces/all'
+OUTPUT_FILE = 'optimized_config.txt'
+N_TRIALS = 10000
+N_WORKERS = 128
+
+try:
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (min(65536, hard), hard))
+except Exception:
+    pass
+
+template, config_space = parse_pspace(PSPACE_FILE)
+
+tage_data = {}
+with open('tage2025.csv') as f:
+    for row in csv.DictReader(f):
+        trace = row['Run']
+        tage_data[trace] = float(row['MR'].rstrip('%')) / 100.0
+
+
+
+def evaluate(config, seed: int = 0) -> float:
+    fd, config_path = tempfile.mkstemp(suffix='.txt', text=True)
+    os.close(fd)
+    
+    try:
+        config_to_file(template, config, config_path)
+
+        proc_size = subprocess.run(
+            ['./cbp', '-c', config_path, '.'],
+            capture_output=True, text=True, timeout=30
+        )
+        
+        match = re.search(r'Piper \(Tagged\) Size:\s+([\d.]+)\s+KB', proc_size.stdout)
+        if not match:
+            return 1e9
+
+        size_kb = float(match.group(1))
+        if size_kb > 192:
+            time.sleep(random.uniform(5, 15))
+            return 1.0 + size_kb / 192.0
+
+        sampled_traces = random.sample(TRACES, TRACE_PER_RUN)
+        costs = []
+        
+        for trace in sampled_traces:
+            trace_path = f'{TRACE_DIR}/{trace}.gz'
+            proc_sim = subprocess.run(
+                ['./cbp', '-c', config_path, trace_path],
+                capture_output=True, text=True, timeout=600
+            )
+
+            lines = proc_sim.stdout.strip().split('\n')
+            our_mr = None
+            for i in range(len(lines) - 1, -1, -1):
+                if 'Full Simulation' in lines[i]:
+                    for j in range(i + 1, min(i + 5, len(lines))):
+                        if '%' in lines[j]:
+                            parts = lines[j].split()
+                            for k, part in enumerate(parts):
+                                if '%' in part and k > 5:
+                                    our_mr = float(part.rstrip('%')) / 100.0
+                                    break
+                            if our_mr is not None:
+                                break
+                    break
+            
+            if our_mr is None:
+                return 1e9
+            
+            tage_mr = tage_data[trace]
+            costs.append(our_mr / (tage_mr + our_mr))
+        
+        return sum(costs) / len(costs)
+
+    except subprocess.TimeoutExpired:
+        return 1e9
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1e9
+    finally:
+        if os.path.exists(config_path):
+            os.remove(config_path)
+
+if __name__ == '__main__':
+    print(f"Starting optimization with {N_WORKERS} workers...")
+    
+    scenario = Scenario(
+        configspace=config_space,
+        deterministic=False,
+        n_trials=N_TRIALS,
+        n_workers=N_WORKERS,
+        name="predictor_optimization"
+    )
+
+    smac = HyperparameterOptimizationFacade(scenario=scenario, target_function=evaluate)
+    incumbent = smac.optimize()
+
+    # Save Best Result
+    final_cost = evaluate(incumbent)
+    print(f"\nBest cost: {final_cost:.4f}")
+    config_to_file(template, incumbent, OUTPUT_FILE)
+    print(f"Saved to: {OUTPUT_FILE}")
