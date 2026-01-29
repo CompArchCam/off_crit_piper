@@ -27,6 +27,8 @@
 // This function is called by the simulator before the start of simulation.
 // It can be used for arbitrary initialization steps for the contestant's code.
 //
+static uint64_t last_cycle = 0;
+
 void beginCondDirPredictor(int argc, char** argv)
 {
     std::string config_path;
@@ -50,6 +52,12 @@ void beginCondDirPredictor(int argc, char** argv)
 //
 void notify_instr_fetch(uint64_t seq_no, uint8_t piece, uint64_t pc, const uint64_t fetch_cycle)
 {
+    if (fetch_cycle > last_cycle) {
+        for (uint64_t c = last_cycle + 1; c <= fetch_cycle; ++c) {
+            cond_predictor_impl.timestep(c);
+        }
+        last_cycle = fetch_cycle;
+    }
 }
 
 //
@@ -154,7 +162,7 @@ void notify_instr_execute_resolve(uint64_t seq_no, uint8_t piece, uint64_t pc, c
             const bool _resolve_dir = _exec_info.taken.value();
             const uint64_t _next_pc = _exec_info.next_pc;
             cbp2016_tage_sc_l.update(seq_no, piece, pc, _resolve_dir, pred_dir, _next_pc);
-            cond_predictor_impl.update(seq_no, piece, pc, _resolve_dir, pred_dir, _next_pc);
+            cond_predictor_impl.update(seq_no, piece, pc, _resolve_dir, pred_dir, _next_pc, execute_cycle);
         }
         else
         {

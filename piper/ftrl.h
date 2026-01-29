@@ -10,6 +10,7 @@ struct ActiveWeight {
     uint64_t hash;  // The raw feature index/hash provided by GetIndex
     float weight;
     size_t feature_idx;
+    uint64_t cycle;
 };
 
 class FTRL {
@@ -51,7 +52,7 @@ public:
     }
     
     // Update weights based on indices provided by IndexManager
-    void update(const std::vector<uint64_t>& indices, float pred, bool actual) {
+    void update(const std::vector<uint64_t>& indices, float pred, bool actual, uint64_t cycle) {
         float g = pred - (actual ? 1.0f : 0.0f);
         float g2 = g * g;
         
@@ -77,7 +78,7 @@ public:
             float new_weight = compute_weight_internal(table.z_table[idx], table.n_table[idx]);
             
             // Push active weight update (including zero, for FSC clearing)
-            nonzero_weights.push_back({raw_idx, new_weight, i});
+            nonzero_weights.push_back({raw_idx, new_weight, i, cycle});
         }
     }
     
@@ -100,6 +101,19 @@ public:
         out = nonzero_weights.front();
         nonzero_weights.pop_front();
         return true;
+    }
+
+    void pop_active_weights_older_than(uint64_t cycle_threshold, std::vector<ActiveWeight>& out) {
+        while (!nonzero_weights.empty()) {
+            const auto& front = nonzero_weights.front();
+            if (front.cycle <= cycle_threshold) {
+                out.push_back(front);
+                nonzero_weights.pop_front();
+            } else {
+                // Since weights are pushed in chronological order, we can stop early
+                break;
+            }
+        }
     }
 
     void clear_nonzero_queue() {

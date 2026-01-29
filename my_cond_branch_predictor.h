@@ -229,7 +229,7 @@ class SampleCondPredictor
             index_manager.update_features(InstClass::condBranchInstClass, PC, taken); 
         }
 
-        void update (uint64_t seq_no, uint8_t piece, uint64_t PC, bool resolveDir, bool predDir, uint64_t nextPC)
+        void update (uint64_t seq_no, uint8_t piece, uint64_t PC, bool resolveDir, bool predDir, uint64_t nextPC, uint64_t cycle)
         {
             auto it = pred_time_histories.find(get_unique_inst_id(seq_no, piece));
             if (it == pred_time_histories.end()) return;
@@ -244,7 +244,7 @@ class SampleCondPredictor
             // Use the indices we captured at prediction time
             // User request: "return the prob as 1.0f / (1.0f + std::exp(-dot)); as the pred float instead of this predDir ? 1.0f : 0.0f"
             float prob = 1.0f / (1.0f + std::exp(-state.sum));
-            ftrl->update(state.indices, prob, resolveDir);
+            ftrl->update(state.indices, prob, resolveDir, cycle);
             
             // If FSC was incorrect, zero out its weights so FTRL can refresh them
             bool fsc_pred_dir = (entry.fsc_sum >= 0.0f);
@@ -257,11 +257,21 @@ class SampleCondPredictor
         
         // Called at commit time to move 1 weight from FTRL to FSC
         void commit(uint64_t seq_no, uint8_t piece, uint64_t pc, bool pred_dir, bool resolve_dir) {
-            if (!ftrl) return;
+            // if (!ftrl) return;
 
-            ActiveWeight entry;
-            ftrl->pop_active_weight(entry);
-            fsc->allocate(entry.hash, entry.feature_idx, entry.weight);
+            // ActiveWeight entry;
+            // ftrl->pop_active_weight(entry);
+            // fsc->allocate(entry.hash, entry.feature_idx, entry.weight);
+        }
+
+        void timestep(uint64_t cycle) {
+             if (cycle < 20) return;
+             uint64_t threshold = cycle - 20;
+             std::vector<ActiveWeight> old_weights;
+             ftrl->pop_active_weights_older_than(threshold, old_weights);
+             for (const auto& w : old_weights) {
+                 fsc->allocate(w.hash, w.feature_idx, w.weight);
+             }
         }
 
         void print_performance() const {
