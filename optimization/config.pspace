@@ -1,14 +1,62 @@
-ftrl {float 0.1 2.0} {float 0.1 2.0} {float 0.0 5.0} {float 0.0 5.0}
+# FTRL Hyperparameters
+# Format: ftrl {float alpha_min alpha_max} {float beta_min beta_max} {float l1_min l1_max} {float l2_min l2_max}
+ftrl {float 0.05 3.0} {float 0.05 3.0} {float 0.0 8.0} {float 0.0 8.0}
+
+# Feature Configuration
 features
+
+# PC-based feature (no parameters)
 {optional ENABLE_PC_0 PC}
-{optional ENABLE_GHIST_0 GHist {int 10 100}}
-{optional ENABLE_GHIST_1 GHist {int 20 200}}
-{optional ENABLE_GHIST_2 GHist {int 40 400}}
-{optional ENABLE_GPATH_0 GPath {int 10 60}}
-{optional ENABLE_GPATH_1 GPath {int 20 120}}
-{optional ENABLE_LHIST_0 LHist {int 4 64}}
-{optional ENABLE_RECENCY_POS_0 RecencyPos {int 4 64}}
+
+# Global History Features - Multiple history lengths
+{optional ENABLE_GHIST_0 GHist {int 5 30}}
+{optional ENABLE_GHIST_1 GHist {int 20 80}}
+{optional ENABLE_GHIST_2 GHist {int 60 150}}
+{optional ENABLE_GHIST_3 GHist {int 120 300}}
+{optional ENABLE_GHIST_4 GHist {int 250 500}}
+
+# Global Path Features - Multiple path lengths
+{optional ENABLE_GPATH_0 GPath {int 5 30}}
+{optional ENABLE_GPATH_1 GPath {int 25 80}}
+{optional ENABLE_GPATH_2 GPath {int 60 150}}
+
+# Global Pattern Features - Direction history without PC
+{optional ENABLE_GPATTERN_0 GPattern {int 5 40}}
+{optional ENABLE_GPATTERN_1 GPattern {int 30 100}}
+
+# Local History Features - Per-PC history tables
+{optional ENABLE_LHIST_0 LHist {int 4 32}}
+{optional ENABLE_LHIST_1 LHist {int 20 80}}
+{optional ENABLE_LHIST_2 LHist {int 50 150}}
+
+# Local Pattern Features - Per-PC patterns without PC mixing
+{optional ENABLE_LPATTERN_0 LPattern {int 4 32}}
+{optional ENABLE_LPATTERN_1 LPattern {int 20 80}}
+
+# Recency Features - LRU stack of recent branch PCs
+{optional ENABLE_RECENCY_0 Recency {int 4 32} {int 1 6}}
+{optional ENABLE_RECENCY_1 Recency {int 20 80} {int 2 8}}
+
+# Recency Position Features - Position of PC in recency stack
+{optional ENABLE_RECENCY_POS_0 RecencyPos {int 4 32}}
+{optional ENABLE_RECENCY_POS_1 RecencyPos {int 20 80}}
+{optional ENABLE_RECENCY_POS_2 RecencyPos {int 60 150}}
+
+# IMLI Features - Inner-Most Loop Iteration
 {optional ENABLE_IMLI_FORWARD_0 IMLI forward}
 {optional ENABLE_IMLI_BACKWARD_0 IMLI backward}
+
+# Blurry Path Features - Region-based coarse-grained path tracking
 {optional ENABLE_BLURRY_PATH_0 BlurryPath {int 2 16}}
-{optional ENABLE_RETURN_STACK_HIST_0 ReturnStackHist {int 4 32}}
+{optional ENABLE_BLURRY_PATH_1 BlurryPath {int 10 40}}
+{optional ENABLE_BLURRY_PATH_2 BlurryPath {int 30 80}}
+
+# Return Stack History Features - Cyclic stack of direction histories
+{optional ENABLE_RETURN_STACK_HIST_0 ReturnStackHist {int 4 24}}
+{optional ENABLE_RETURN_STACK_HIST_1 ReturnStackHist {int 20 64}}
+
+# BrIMLI Features - Branch Immediate Loop Iteration
+{optional ENABLE_BRIMLI_0 BrIMLI}
+
+# TaIMLI Features - Target Inner-Most Loop Iteration
+{optional ENABLE_TAIMLI_0 TaIMLI}
