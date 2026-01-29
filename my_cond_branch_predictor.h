@@ -152,35 +152,7 @@ class SampleCondPredictor
                 }
             }
 
-            if (!config_loaded) {
-                // Fallback to default setup if no config provided
-                // 1. Initialize Features (Diverse Set)
-                // PC
-                index_manager.add_feature(std::make_unique<PCFeature>(std::vector<std::string>{}));
-                
-                // Global Histories
-                index_manager.add_feature(std::make_unique<GHistFeature>(std::vector<std::string>{"60"}));
-                index_manager.add_feature(std::make_unique<GHistFeature>(std::vector<std::string>{"100"}));
-                
-                // Global Path
-                index_manager.add_feature(std::make_unique<GPathFeature>(std::vector<std::string>{"40"}));
-                
-                // Local History
-                index_manager.add_feature(std::make_unique<LHistFeature>(std::vector<std::string>{"32"}));
-                
-                // Recency Position
-                index_manager.add_feature(std::make_unique<RecencyPosFeature>(std::vector<std::string>{"31"}));
-                
-                // IMLI (Forward/Backward)
-                index_manager.add_feature(std::make_unique<IMLIFeature>(std::vector<std::string>{"forward"}));
-                index_manager.add_feature(std::make_unique<IMLIFeature>(std::vector<std::string>{"backward"}));
-                
-                // Blurry Path
-                index_manager.add_feature(std::make_unique<BlurryPathFeature>(std::vector<std::string>{"4"}));
-                
-                // Return Stack
-                index_manager.add_feature(std::make_unique<ReturnStackHistFeature>(std::vector<std::string>{"16"}));
-            }
+            assert(config_loaded);
 
             // 2. Initialize FTRL
             ftrl = std::make_unique<FTRL>(index_manager.get_num_features(), 
@@ -288,9 +260,8 @@ class SampleCondPredictor
             if (!ftrl) return;
 
             ActiveWeight entry;
-            while (ftrl->pop_active_weight(entry)) {
-                fsc->allocate(entry.hash, entry.feature_idx, entry.weight);
-            }
+            ftrl->pop_active_weight(entry);
+            fsc->allocate(entry.hash, entry.feature_idx, entry.weight);
         }
 
         void print_performance() const {
