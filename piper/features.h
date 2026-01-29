@@ -91,42 +91,6 @@ public:
 };
 
 // ============================================================================
-// Global Pattern Feature (direction history without PC)
-// ============================================================================
-class GPatternFeature : public Feature {
-private:
-    RollingHistory<5> history;
-    size_t pattern_len;
-    
-    uint8_t compute_5bit_pattern(uint64_t pc, bool taken) const {
-        uint64_t pc_s = pc >> 2;
-        uint64_t mix = pc_s ^ (pc_s >> 2) ^ (pc_s >> 4) ^ (taken ? 1 : 0);
-        return mix & 0x1F;
-    }
-
-public:
-    explicit GPatternFeature(const std::vector<std::string>& args) : Feature(args) {
-        if (args.size() < 1) throw std::runtime_error("GPATTERN requires: pattern_len");
-        pattern_len = std::stoull(args[0]);
-        if (pattern_len > 0) history.require(pattern_len);
-    }
-    
-    void update(InstClass inst_class, uint64_t pc, 
-                bool actual_outcome) override {
-        (void)inst_class;
-        uint8_t pattern = compute_5bit_pattern(pc, actual_outcome);
-        history.update(pattern);
-    }
-    
-    uint64_t get_index(uint64_t pc) const override {
-        (void)pc;
-        uint64_t h = 0;
-        if (pattern_len > 0) h = history.get_hash(pattern_len);
-        return h;
-    }
-};
-
-// ============================================================================
 // Local History Feature (per-PC history table)
 // ============================================================================
 class LHistFeature : public Feature {
@@ -171,54 +135,6 @@ public:
     uint64_t get_index(uint64_t pc) const override {
         size_t idx = hash_64(pc) % num_entries;
         return pc ^ histories[idx].hash();
-    }
-};
-
-// ============================================================================
-// Local Pattern Feature (local history without PC mixing)
-// ============================================================================
-class LPatternFeature : public Feature {
-private:
-    struct LocalHist {
-        uint64_t bits;
-        size_t width;
-        
-        LocalHist(size_t w) : bits(0), width(w) {}
-        
-        void update(bool outcome) {
-            bits = ((bits << 1) | (outcome ? 1 : 0)) & ((1ULL << width) - 1);
-        }
-        
-        uint64_t hash() const {
-            return hash_64(bits);
-        }
-    };
-    
-    std::vector<LocalHist> histories;
-    size_t num_entries;
-    size_t hist_len;
-
-public:
-    explicit LPatternFeature(const std::vector<std::string>& args) : Feature(args), num_entries(1024) {
-        if (args.size() < 1) throw std::runtime_error("LPATTERN requires: hist_len");
-        hist_len = std::stoull(args[0]);
-        
-        histories.reserve(num_entries);
-        for (size_t i = 0; i < num_entries; ++i) {
-            histories.emplace_back(hist_len);
-        }
-    }
-    
-    void update(InstClass inst_class, uint64_t pc, 
-                bool actual_outcome) override {
-        (void)inst_class;
-        size_t idx = hash_64(pc) % num_entries;
-        histories[idx].update(actual_outcome);
-    }
-    
-    uint64_t get_index(uint64_t pc) const override {
-        size_t idx = hash_64(pc) % num_entries;
-        return histories[idx].hash();
     }
 };
 

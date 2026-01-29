@@ -1,6 +1,8 @@
 # FTRL Hyperparameters
 # Format: ftrl {float alpha_min alpha_max} {float beta_min beta_max} {float l1_min l1_max} {float l2_min l2_max}
 ftrl {float 0.05 3.0} {float 0.05 3.0} {float 0.0 8.0} {float 0.0 8.0}
+bloom {int 500 5000}
+hbt {int 500 5000} {int 1 15}
 
 # Feature Configuration
 features
@@ -20,18 +22,10 @@ features
 {optional ENABLE_GPATH_1 GPath {int 25 80}}
 {optional ENABLE_GPATH_2 GPath {int 60 150}}
 
-# Global Pattern Features - Direction history without PC
-{optional ENABLE_GPATTERN_0 GPattern {int 5 40}}
-{optional ENABLE_GPATTERN_1 GPattern {int 30 100}}
-
 # Local History Features - Per-PC history tables
 {optional ENABLE_LHIST_0 LHist {int 4 32}}
 {optional ENABLE_LHIST_1 LHist {int 20 80}}
 {optional ENABLE_LHIST_2 LHist {int 50 150}}
-
-# Local Pattern Features - Per-PC patterns without PC mixing
-{optional ENABLE_LPATTERN_0 LPattern {int 4 32}}
-{optional ENABLE_LPATTERN_1 LPattern {int 20 80}}
 
 # Recency Features - LRU stack of recent branch PCs
 {optional ENABLE_RECENCY_0 Recency {int 4 32} {int 1 6}}

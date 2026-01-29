@@ -29,6 +29,10 @@ private:
     std::vector<TableState> tables;
     std::deque<ActiveWeight> nonzero_weights;
     
+    std::vector<uint8_t> bloom_taken;
+    std::vector<uint8_t> bloom_not_taken;
+    uint64_t bloom_decay_period;
+    
     // Hard Branch Table (HBT) for detecting hard-to-predict branches
     struct HBTEntry {
         uint8_t misp_counter;  // 5-bit saturating counter (0-31)
@@ -39,8 +43,11 @@ private:
     };
     
     std::vector<HBTEntry> hbt;
+    uint64_t hbt_decay_period;
+    uint8_t hbt_decay_amount;
     uint64_t retired_branches;
-    static const size_t HBT_SIZE = 1 << 14;  // 16K entries
+
+    static const size_t TABLE_SIZE = 1 << 14;  // 16K entries for HBT and Bloom
     
     float alpha;
     float beta;
@@ -52,9 +59,9 @@ private:
         return -(z - (z > 0 ? 1.0f : -1.0f) * l1) / (((beta + std::sqrt(n)) / alpha) + l2);
     }
     
-    // HBT helper methods
-    uint64_t hash_hbt_index(uint64_t pc) const {
-        return pc & (HBT_SIZE - 1);
+    // Helper methods
+    uint64_t hash_index(uint64_t pc) const {
+        return pc & (TABLE_SIZE - 1);
     }
     
     uint64_t compute_tag(uint64_t pc) const {
@@ -63,7 +70,7 @@ private:
     }
     
     bool is_hard_to_predict(uint64_t pc) const {
-        size_t idx = hash_hbt_index(pc);
+        size_t idx = hash_index(pc);
         const auto& entry = hbt[idx];
         if (!entry.valid || entry.tag != compute_tag(pc)) return false;
         // Counter saturates at 31 (5 bits)
@@ -72,10 +79,9 @@ private:
     
     void update_hbt(uint64_t pc, bool mispredicted, bool hit_in_last) {
         // Only allocate/update if branch hit in last history table
-
         if (!mispredicted) return;
         
-        size_t idx = hash_hbt_index(pc);
+        size_t idx = hash_index(pc);
         auto& entry = hbt[idx];
         uint64_t tag = compute_tag(pc);
         
@@ -93,11 +99,10 @@ private:
         }
     }
     
-    void apply_leaky_bucket() {
-        // Decrement all counters by min(counter, 15)
+    void apply_leaky_bucket_hbt() {
         for (auto& entry : hbt) {
             if (entry.valid && entry.misp_counter > 0) {
-                uint8_t decrement = std::min(static_cast<uint8_t>(15), entry.misp_counter);
+                uint8_t decrement = std::min(hbt_decay_amount, entry.misp_counter);
                 entry.misp_counter -= decrement;
                 // Invalidate entry if counter reaches 0
                 if (entry.misp_counter == 0) {
@@ -107,15 +112,38 @@ private:
         }
     }
 
+    void apply_leaky_bucket_bloom() {
+        for (size_t i = 0; i < TABLE_SIZE; ++i) {
+            if (bloom_taken[i] > 0) bloom_taken[i]--;
+            if (bloom_not_taken[i] > 0) bloom_not_taken[i]--;
+        }
+    }
+    
+    void update_bloom(uint64_t pc, bool taken) {
+        size_t idx = hash_index(pc);
+        if (taken) {
+            if (bloom_taken[idx] < 3) bloom_taken[idx]++;
+        } else {
+            if (bloom_not_taken[idx] < 3) bloom_not_taken[idx]++;
+        }
+    }
+
+    bool should_train(uint64_t pc) const {
+        size_t idx = hash_index(pc);
+        return (bloom_taken[idx] > 0 && bloom_not_taken[idx] > 0);
+    }
+
 public:
-    FTRL(size_t num_features, float _alpha, float _beta, float _l1, float _l2)
+    FTRL(size_t num_features, float _alpha, float _beta, float _l1, float _l2, uint64_t _bloom_decay_period, uint64_t _hbt_decay_period, uint8_t _hbt_decay_amount)
         : alpha(_alpha), beta(_beta), l1(_l1), l2(_l2),
-          hbt(HBT_SIZE),
+          bloom_decay_period(_bloom_decay_period),
+          hbt_decay_period(_hbt_decay_period), hbt_decay_amount(_hbt_decay_amount),
+          bloom_taken(TABLE_SIZE, 0), bloom_not_taken(TABLE_SIZE, 0),
+          hbt(TABLE_SIZE),
           retired_branches(0)
     {
         if (alpha <= 0.0f) throw std::runtime_error("FTRL alpha must be > 0");
         tables.reserve(num_features);
-        // Hardcode size to 2^14
         size_t fixed_size = 1 << 14; 
         for (size_t i = 0; i < num_features; ++i) {
             tables.emplace_back(fixed_size);
@@ -123,52 +151,78 @@ public:
     }
     
     // Update weights based on indices provided by IndexManager
-    // Now requires TagePrediction for feedback
+    // Requires TagePrediction for feedback
     void update(const std::vector<uint64_t>& indices, float pred, bool actual, uint64_t cycle, uint64_t pc, const TagePrediction& tage_pred) {
         
-        // Track retired branches for leaky bucket mechanism
         retired_branches++;
         
-        // Apply leaky bucket every 1000 retired branches
-        if (retired_branches % 1000 == 0) {
-            apply_leaky_bucket();
+        // 1. Update Bloom Filters
+        update_bloom(pc, actual);
+        
+        // Bloom Filter decay
+        if (retired_branches % bloom_decay_period == 0) {
+            apply_leaky_bucket_bloom();
+        }
+
+        // HBT decay
+        if (retired_branches % hbt_decay_period == 0) {
+            apply_leaky_bucket_hbt();
         }
         
-        // Update Hard Branch Table
+        // 2. Update Hard Branch Table
         bool mispredicted = (tage_pred.prediction != actual);
         update_hbt(pc, mispredicted, tage_pred.hit_in_last_history_table);
         
-        // Only update weights if branch is hard-to-predict (counter saturated)
-        if (!is_hard_to_predict(pc)) {
-            return;
+        // 3. FTRL Training Gate
+        if (should_train(pc)) {
+            float g = pred - (actual ? 1.0f : 0.0f);
+            float g2 = g * g;
+            
+            size_t count = std::min(indices.size(), tables.size());
+            
+            for (size_t i = 0; i < count; ++i) {
+                uint64_t raw_idx = indices[i];
+                auto& table = tables[i];
+                
+                size_t idx = raw_idx & 0x3FFF;
+                
+                float zi = table.z_table[idx];
+                float ni = table.n_table[idx];
+                
+                float weight = compute_weight_internal(zi, ni);
+                
+                float si = (std::sqrt(ni + g2) - std::sqrt(ni)) / alpha;
+                table.z_table[idx] += g - si * weight;
+                table.n_table[idx] += g2;
+            }
         }
+        
+        // 4. Weight Synchronization to FSC via HBT check
+        bool hard = is_hard_to_predict(pc);
 
-        float g = pred - (actual ? 1.0f : 0.0f);
-        float g2 = g * g;
+        // We need to send weights for this PC's indices. 
+        // If Hard: send actual weights. 
+        // If Not Hard: send 0.0f.
+        // NOTE: We only need to send updates if we trained OR if we need to clear (send 0).
+        // Actually, "If it is not hard to predict, send over zero weights (they should zero the weights if theyre there already)."
+        // This implies we should ALWAYS send updates potentially? Or only if we think they are in FSC?
+        // Since we don't know if they are in FSC efficiently, we should probably send them.
+        // But sending every cycle is expensive? 
+        // The prompt says "Then at the end... send the weights over." implies every update call.
         
         size_t count = std::min(indices.size(), tables.size());
-        
         for (size_t i = 0; i < count; ++i) {
             uint64_t raw_idx = indices[i];
-            auto& table = tables[i];
+            float weight_to_send = 0.0f;
             
-            // Map raw index/hash to table size using simple modulo
-            // Table size is fixed 1<<14, so mask is (1<<14)-1 = 0x3FFF
-            size_t idx = raw_idx & 0x3FFF;
+            if (hard) {
+                const auto& table = tables[i];
+                size_t idx = raw_idx & 0x3FFF;
+                weight_to_send = compute_weight_internal(table.z_table[idx], table.n_table[idx]);
+            }
             
-            float zi = table.z_table[idx];
-            float ni = table.n_table[idx];
-            
-            float weight = compute_weight_internal(zi, ni);
-            
-            float si = (std::sqrt(ni + g2) - std::sqrt(ni)) / alpha;
-            table.z_table[idx] += g - si * weight;
-            table.n_table[idx] += g2;
-            
-            float new_weight = compute_weight_internal(table.z_table[idx], table.n_table[idx]);
-            
-            // Push active weight update (including zero, for FSC clearing)
-            nonzero_weights.push_back({raw_idx, new_weight, i, cycle});
+            // Push to queue
+            nonzero_weights.push_back({raw_idx, weight_to_send, i, cycle});
         }
     }
     

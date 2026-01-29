@@ -99,6 +99,10 @@ class SampleCondPredictor
             float ftrl_beta = 0.8f;
             float ftrl_l1 = 0.2f;
             float ftrl_l2 = 0.6f;
+
+            uint64_t bloom_decay_period = 10000;
+            uint64_t hbt_decay_period = 10000;
+            uint8_t hbt_decay_amount = 1;
             
             bool config_loaded = false;
             if (!config_path.empty()) {
@@ -113,6 +117,10 @@ class SampleCondPredictor
                         
                         if (type == "ftrl") {
                             iss >> ftrl_alpha >> ftrl_beta >> ftrl_l1 >> ftrl_l2;
+                        } else if (type == "bloom") {
+                            iss >> bloom_decay_period;
+                        } else if (type == "hbt") {
+                            iss >> hbt_decay_period >> hbt_decay_amount;
                         } else if (type == "features") {
                             // section header, ignore
                         } else {
@@ -129,12 +137,8 @@ class SampleCondPredictor
                                 index_manager.add_feature(std::make_unique<GHistFeature>(args));
                             } else if (type == "GPath") {
                                 index_manager.add_feature(std::make_unique<GPathFeature>(args));
-                            } else if (type == "GPattern") {
-                                index_manager.add_feature(std::make_unique<GPatternFeature>(args));
                             } else if (type == "LHist") {
                                 index_manager.add_feature(std::make_unique<LHistFeature>(args));
-                            } else if (type == "LPattern") {
-                                index_manager.add_feature(std::make_unique<LPatternFeature>(args));
                             } else if (type == "Recency") {
                                 index_manager.add_feature(std::make_unique<RecencyFeature>(args));
                             } else if (type == "RecencyPos") {
@@ -169,7 +173,10 @@ class SampleCondPredictor
                 ftrl_alpha,
                 ftrl_beta,
                 ftrl_l1,
-                ftrl_l2
+                ftrl_l2,
+                bloom_decay_period,
+                hbt_decay_period,
+                hbt_decay_amount
             );
 
             // 3. Initialize FSC (fast path cache)
