@@ -24,7 +24,7 @@ class TestCBPInterface(unittest.TestCase):
         self.assertIsNone(tage)
 
     def test_parse_output_zeros(self):
-        output = "ReferenceMispred/Mispred: 0/0"
+        output = "Combined Misp/Tage Misp: 0/0"
         combined, tage = parse_cbp_output(output)
         self.assertEqual(combined, 0)
         self.assertEqual(tage, 0)
@@ -48,7 +48,7 @@ class TestCBPInterface(unittest.TestCase):
         ../cbp <trace> -c <config>
         """
         mock_proc = MagicMock()
-        mock_proc.stdout = "ReferenceMispred/Mispred: 10/20"
+        mock_proc.stdout = "Combined Misp/Tage Misp: 10/20"
         mock_proc.stderr = ""
         mock_proc.returncode = 0
         mock_run.return_value = mock_proc
