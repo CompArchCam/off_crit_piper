@@ -25,7 +25,7 @@ def parse_cbp_output(stdout):
     Expected format line: "ReferenceMispred/Mispred: <combined>/<tage>"
     Returns: (combined_mispredictions, tage_mispredictions)
     """
-    match = re.search(r'ReferenceMispred/Mispred:\s+(\d+)/(\d+)', stdout)
+    match = re.search(r'Combined Misp/Tage Misp:\s+(\d+)/(\d+)', stdout)
     if match:
         combined_misp = int(match.group(1))
         tage_misp = int(match.group(2))
