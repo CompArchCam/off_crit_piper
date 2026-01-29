@@ -23,7 +23,7 @@
 // This function is called by the simulator before the start of simulation.
 // It can be used for arbitrary initialization steps for the contestant's code.
 //
-extern void beginCondDirPredictor();
+extern void beginCondDirPredictor(int argc, char** argv);
 
 //
 // notify_instr_fetch(uint64_t seq_no, uint8_t piece, uint64_t pc, const uint64_t fetch_cycle)
@@ -92,3 +92,5 @@ extern void notify_instr_commit(uint64_t seq_no, uint8_t piece, uint64_t pc, con
 // It can be used by the contestant to print out other contestant-specific measurements.
 //
 extern void endCondDirPredictor();
+
+extern void print_my_stats();

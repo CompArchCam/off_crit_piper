@@ -27,11 +27,19 @@
 // This function is called by the simulator before the start of simulation.
 // It can be used for arbitrary initialization steps for the contestant's code.
 //
-void beginCondDirPredictor()
+void beginCondDirPredictor(int argc, char** argv)
 {
+    std::string config_path;
+    for (int i = 0; i < argc; ++i) {
+        if (std::string(argv[i]) == "-c" && i + 1 < argc) {
+            config_path = argv[i+1];
+            break;
+        }
+    }
+
     // setup sample_predictor
     cbp2016_tage_sc_l.setup();
-    cond_predictor_impl.setup();
+    cond_predictor_impl.setup(config_path);
 }
 
 //
@@ -54,7 +62,8 @@ void notify_instr_fetch(uint64_t seq_no, uint8_t piece, uint64_t pc, const uint6
 bool get_cond_dir_prediction(uint64_t seq_no, uint8_t piece, uint64_t pc, const uint64_t pred_cycle)
 {
     const bool tage_sc_l_pred =  cbp2016_tage_sc_l.predict(seq_no, piece, pc);
-    const bool my_prediction = cond_predictor_impl.predict(seq_no, piece, pc, tage_sc_l_pred);
+    const int confidence = cbp2016_tage_sc_l.get_confidence_level();
+    const bool my_prediction = cond_predictor_impl.predict(seq_no, piece, pc, tage_sc_l_pred, confidence);
     return my_prediction;
 }
 
@@ -163,6 +172,9 @@ void notify_instr_execute_resolve(uint64_t seq_no, uint8_t piece, uint64_t pc, c
 // For the sample predictor implementation, we do not leverage commit information
 void notify_instr_commit(uint64_t seq_no, uint8_t piece, uint64_t pc, const bool pred_dir, const ExecuteInfo& _exec_info, const uint64_t commit_cycle)
 {
+    bool resolve_dir = false;
+    if (_exec_info.taken.has_value()) resolve_dir = _exec_info.taken.value();
+    cond_predictor_impl.commit(seq_no, piece, pc, pred_dir, resolve_dir);
 }
 
 //
@@ -175,4 +187,8 @@ void endCondDirPredictor ()
 {
     cbp2016_tage_sc_l.terminate();
     cond_predictor_impl.terminate();
+}
+
+void print_my_stats() {
+    cond_predictor_impl.print_performance();
 }

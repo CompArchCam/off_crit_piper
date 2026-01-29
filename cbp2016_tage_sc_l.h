@@ -890,6 +890,12 @@ class CBP2016_TAGE_SC_L
         };
 
 
+        int get_confidence_level() const {
+            if (HighConf) return 2;
+            if (MedConf) return 1;
+            return 0;
+        }
+
         //  TAGE PREDICTION: same code at fetch or retire time but the index and tags must recomputed
         void Tagepred (UINT64 PC, const cbp_hist_t& hist_to_use)
         {

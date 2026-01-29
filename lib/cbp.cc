@@ -293,7 +293,10 @@ int main(int argc, char ** argv)
   //   beginCondDirPredictor((argc - i), &(argv[i]));
   //else
   //   beginCondDirPredictor(0, (char **)NULL);
-  beginCondDirPredictor();
+  if (i < argc)
+     beginCondDirPredictor((argc - i), &(argv[i]));
+  else
+     beginCondDirPredictor(0, (char **)NULL);
 
   db_t *inst = reader.get_inst(); 
 
@@ -324,4 +327,5 @@ int main(int argc, char ** argv)
   endPredictor();
   endCondDirPredictor();
   sim->output();
+  print_my_stats();
 }
