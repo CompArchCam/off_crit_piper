@@ -10,34 +10,44 @@ class TestCBPInterface(unittest.TestCase):
     def test_parse_output_valid(self):
         output = """
         Some unrelated text...
-        Combined Misp/Tage Misp: 1234/5678
-        More text...
+        FINAL_MISPREDICTIONS:
+        cbp2016_tage_sc_l: 5678
+        cbp2016_tage_no_sc: 339350
+        cond_predictor_impl: 1234
+        minitage: 321805
+        tage_192: 296306
         """
-        combined, tage = parse_cbp_output(output)
-        self.assertEqual(combined, 1234)
-        self.assertEqual(tage, 5678)
+        results = parse_cbp_output(output)
+        self.assertEqual(results.get('cond_predictor_impl'), 1234)
+        self.assertEqual(results.get('cbp2016_tage_sc_l'), 5678)
+        self.assertEqual(results.get('minitage'), 321805)
 
     def test_parse_output_invalid(self):
         output = "No valid stats line here."
-        combined, tage = parse_cbp_output(output)
-        self.assertIsNone(combined)
-        self.assertIsNone(tage)
+        with self.assertRaises(ValueError):
+            parse_cbp_output(output)
 
-    def test_parse_output_zeros(self):
-        output = "Combined Misp/Tage Misp: 0/0"
-        combined, tage = parse_cbp_output(output)
-        self.assertEqual(combined, 0)
-        self.assertEqual(tage, 0)
+    def test_calculate_cost_missing_keys(self):
+        misp_dict = {'some_other_predictor': 100}
+        with self.assertRaises(KeyError):
+            calculate_cost(misp_dict)
 
     # --- Cost Calculation Tests ---
     def test_calculate_cost(self):
-        # cost = combined / tage
-        cost = calculate_cost(100, 200)
+        # cost = cond_predictor_impl / cbp2016_tage_sc_l
+        misp_dict = {
+            'cond_predictor_impl': 100,
+            'cbp2016_tage_sc_l': 200
+        }
+        cost = calculate_cost(misp_dict)
         self.assertEqual(cost, 0.5)
 
     def test_calculate_cost_zero_denominator(self):
-        # Prevent division by zero
-        cost = calculate_cost(100, 0)
+        misp_dict = {
+            'cond_predictor_impl': 100,
+            'cbp2016_tage_sc_l': 0
+        }
+        cost = calculate_cost(misp_dict)
         self.assertEqual(cost, 1.0)
 
     # --- run_cbp Mocked Tests ---
@@ -48,7 +58,7 @@ class TestCBPInterface(unittest.TestCase):
         ../cbp <trace> -c <config>
         """
         mock_proc = MagicMock()
-        mock_proc.stdout = "Combined Misp/Tage Misp: 10/20"
+        mock_proc.stdout = "FINAL_MISPREDICTIONS:\ncond_predictor_impl: 10\ncbp2016_tage_sc_l: 20"
         mock_proc.stderr = ""
         mock_proc.returncode = 0
         mock_run.return_value = mock_proc
@@ -130,9 +140,9 @@ class TestCBPInterface(unittest.TestCase):
             if returncode != 0:
                 self.fail(f"Integration run failed with code {returncode}. Stderr: {stderr}")
             
-            combined, tage = parse_cbp_output(stdout)
-            self.assertIsNotNone(combined, "Failed to parse combined mispreds from real run")
-            self.assertIsNotNone(tage, "Failed to parse tage mispreds from real run")
+            results = parse_cbp_output(stdout)
+            self.assertIn('cond_predictor_impl', results)
+            self.assertIn('cbp2016_tage_sc_l', results)
             
         except TimeoutError:
              self.fail("Integration run timed out (30s)")

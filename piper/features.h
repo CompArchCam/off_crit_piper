@@ -14,7 +14,8 @@
 // ============================================================================
 class PCFeature : public Feature {
 public:
-  explicit PCFeature(const std::vector<std::string> &args) : Feature(args) {}
+  explicit PCFeature(const std::vector<std::string> &args, bool _use_pc = true)
+      : Feature(args, _use_pc) {}
 
   void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
               uint64_t target) override {
@@ -23,7 +24,7 @@ public:
     (void)actual_outcome;
   }
 
-  uint64_t get_index(uint64_t pc) const override { return pc; }
+  uint64_t get_index(uint64_t pc) const override { return use_pc ? pc : 0; }
 };
 
 // ============================================================================
@@ -41,7 +42,9 @@ private:
   }
 
 public:
-  explicit GHistFeature(const std::vector<std::string> &args) : Feature(args) {
+  explicit GHistFeature(const std::vector<std::string> &args,
+                        bool _use_pc = true)
+      : Feature(args, _use_pc) {
     if (args.size() < 1)
       throw std::runtime_error("GHIST requires: hist_len");
     hist_len = std::stoull(args[0]);
@@ -56,7 +59,8 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    return pc ^ history.get_hash(hist_len);
+    uint64_t h = history.get_hash(hist_len);
+    return use_pc ? (pc ^ h) : h;
   }
 };
 
@@ -70,8 +74,9 @@ private:
   size_t bits_per_pc;
 
 public:
-  explicit GPathFeature(const std::vector<std::string> &args)
-      : Feature(args), bits_per_pc(8) {
+  explicit GPathFeature(const std::vector<std::string> &args,
+                        bool _use_pc = true)
+      : Feature(args, _use_pc), bits_per_pc(8) {
     if (args.size() < 1)
       throw std::runtime_error("GPATH requires: entries");
     entries = std::stoull(args[0]);
@@ -89,7 +94,9 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    uint64_t h = pc;
+    uint64_t h = 0;
+    if (use_pc)
+      h = pc;
     if (entries > 0)
       h ^= history.get_hash(entries);
     return h;
@@ -119,8 +126,9 @@ private:
   size_t hist_len;
 
 public:
-  explicit LHistFeature(const std::vector<std::string> &args)
-      : Feature(args), num_entries(1024) {
+  explicit LHistFeature(const std::vector<std::string> &args,
+                        bool _use_pc = true)
+      : Feature(args, _use_pc), num_entries(1024) {
     if (args.size() < 1)
       throw std::runtime_error("LHIST requires: hist_len");
     hist_len = std::stoull(args[0]);
@@ -140,7 +148,8 @@ public:
 
   uint64_t get_index(uint64_t pc) const override {
     size_t idx = hash_64(pc) % num_entries;
-    return pc ^ histories[idx].hash();
+    uint64_t h = histories[idx].hash();
+    return use_pc ? (pc ^ h) : h;
   }
 };
 
@@ -153,8 +162,9 @@ private:
   bool is_backward;
 
 public:
-  explicit IMLIFeature(const std::vector<std::string> &args)
-      : Feature(args), counter(0), is_backward(true) {
+  explicit IMLIFeature(const std::vector<std::string> &args,
+                       bool _use_pc = true)
+      : Feature(args, _use_pc), counter(0), is_backward(true) {
     if (args.size() >= 1) {
       std::string dir = args[0];
       is_backward = (dir == "backward" || dir == "bwd");
@@ -178,7 +188,9 @@ public:
     }
   }
 
-  uint64_t get_index(uint64_t pc) const override { return pc ^ counter; }
+  uint64_t get_index(uint64_t pc) const override {
+    return use_pc ? (pc ^ counter) : counter;
+  }
 };
 
 // ============================================================================
@@ -191,8 +203,9 @@ private:
   size_t addr_shift;
 
 public:
-  explicit RecencyFeature(const std::vector<std::string> &args)
-      : Feature(args) {
+  explicit RecencyFeature(const std::vector<std::string> &args,
+                          bool _use_pc = true)
+      : Feature(args, _use_pc) {
     if (args.size() < 2)
       throw std::runtime_error("RECENCY requires: depth addr_shift");
     stack_depth = std::stoull(args[0]);
@@ -222,7 +235,7 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    uint64_t h = pc;
+    uint64_t h = use_pc ? pc : 0;
     for (size_t i = 0; i < stack_depth; ++i) {
       h = (h << addr_shift) ^ hash_64(stack[i]);
     }
@@ -239,8 +252,9 @@ private:
   size_t search_depth;
 
 public:
-  explicit RecencyPosFeature(const std::vector<std::string> &args)
-      : Feature(args) {
+  explicit RecencyPosFeature(const std::vector<std::string> &args,
+                             bool _use_pc = true)
+      : Feature(args, _use_pc) {
     if (args.size() < 1)
       throw std::runtime_error("RECENCY_POS requires: depth");
     search_depth = std::stoull(args[0]);
@@ -277,7 +291,7 @@ public:
         break;
       }
     }
-    return pc ^ pos;
+    return use_pc ? (pc ^ pos) : pos;
   }
 };
 
@@ -292,8 +306,9 @@ private:
   uint64_t current_region;
 
 public:
-  explicit BlurryPathFeature(const std::vector<std::string> &args)
-      : Feature(args), shift_amount(8), current_region(0) {
+  explicit BlurryPathFeature(const std::vector<std::string> &args,
+                             bool _use_pc = true)
+      : Feature(args, _use_pc), shift_amount(8), current_region(0) {
     if (args.size() < 1)
       throw std::runtime_error("BLURRY_PATH requires: num_regions");
     num_regions = std::stoull(args[0]);
@@ -316,7 +331,8 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    return pc ^ history.get_hash(num_regions);
+    uint64_t h = history.get_hash(num_regions);
+    return use_pc ? (pc ^ h) : h;
   }
 };
 
@@ -344,8 +360,9 @@ private:
   size_t head;
 
 public:
-  explicit ReturnStackHistFeature(const std::vector<std::string> &args)
-      : Feature(args), stack_depth(8), head(0) {
+  explicit ReturnStackHistFeature(const std::vector<std::string> &args,
+                                  bool _use_pc = true)
+      : Feature(args, _use_pc), stack_depth(8), head(0) {
     if (args.size() < 1)
       throw std::runtime_error("RET_STACK requires: hist_len");
     hist_len = std::stoull(args[0]);
@@ -373,7 +390,8 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    return pc ^ stack[head].hash();
+    uint64_t h = stack[head].hash();
+    return use_pc ? (pc ^ h) : h;
   }
 };
 
@@ -386,8 +404,9 @@ private:
   uint64_t current_region;
 
 public:
-  explicit BrIMLIFeature(const std::vector<std::string> &args)
-      : Feature(args), counter(0), current_region(0) {
+  explicit BrIMLIFeature(const std::vector<std::string> &args,
+                         bool _use_pc = true)
+      : Feature(args, _use_pc), counter(0), current_region(0) {
     if (args.size() >= 1)
       region_shift = std::stoull(args[0]);
   }
@@ -411,7 +430,9 @@ public:
 
 private:
   size_t region_shift = 8;
-  uint64_t get_index(uint64_t pc) const override { return pc ^ counter; }
+  uint64_t get_index(uint64_t pc) const override {
+    return use_pc ? (pc ^ counter) : counter;
+  }
 };
 
 // ============================================================================
@@ -424,8 +445,9 @@ private:
   uint64_t current_region;
 
 public:
-  explicit TaIMLIFeature(const std::vector<std::string> &args)
-      : Feature(args), counter(0), current_region(0) {
+  explicit TaIMLIFeature(const std::vector<std::string> &args,
+                         bool _use_pc = true)
+      : Feature(args, _use_pc), counter(0), current_region(0) {
     if (args.size() >= 1)
       region_shift = std::stoull(args[0]);
   }
@@ -450,7 +472,9 @@ public:
 private:
   size_t region_shift = 8;
 
-  uint64_t get_index(uint64_t pc) const override { return pc ^ counter; }
+  uint64_t get_index(uint64_t pc) const override {
+    return use_pc ? (pc ^ counter) : counter;
+  }
 };
 
 // ============================================================================
@@ -463,8 +487,9 @@ private:
   size_t shift;
 
 public:
-  explicit PHistFeature(const std::vector<std::string> &args)
-      : Feature(args), shift(2) {
+  explicit PHistFeature(const std::vector<std::string> &args,
+                        bool _use_pc = true)
+      : Feature(args, _use_pc), shift(2) {
     if (args.size() < 1)
       throw std::runtime_error("PHIST requires: hist_len");
     hist_len = std::stoull(args[0]);
@@ -485,7 +510,8 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    return pc ^ history.get_hash(hist_len);
+    uint64_t h = history.get_hash(hist_len);
+    return use_pc ? (pc ^ h) : h;
   }
 };
 
@@ -498,7 +524,9 @@ private:
   size_t hist_len;
 
 public:
-  explicit FHistFeature(const std::vector<std::string> &args) : Feature(args) {
+  explicit FHistFeature(const std::vector<std::string> &args,
+                        bool _use_pc = true)
+      : Feature(args, _use_pc) {
     if (args.size() < 1)
       throw std::runtime_error("FHIST requires: hist_len");
     hist_len = std::stoull(args[0]);
@@ -515,7 +543,8 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    return (pc ^ (pc >> 3)) ^ history.get_hash(hist_len);
+    uint64_t h = history.get_hash(hist_len);
+    return use_pc ? ((pc ^ (pc >> 3)) ^ h) : h;
   }
 };
 
@@ -528,7 +557,9 @@ private:
   size_t hist_len;
 
 public:
-  explicit BHistFeature(const std::vector<std::string> &args) : Feature(args) {
+  explicit BHistFeature(const std::vector<std::string> &args,
+                        bool _use_pc = true)
+      : Feature(args, _use_pc) {
     if (args.size() < 1)
       throw std::runtime_error("BHIST requires: hist_len");
     hist_len = std::stoull(args[0]);
@@ -545,7 +576,8 @@ public:
   }
 
   uint64_t get_index(uint64_t pc) const override {
-    return (pc ^ (pc >> 6)) ^ history.get_hash(hist_len);
+    uint64_t h = history.get_hash(hist_len);
+    return use_pc ? ((pc ^ (pc >> 6)) ^ h) : h;
   }
 };
 
@@ -560,8 +592,9 @@ private:
   uint64_t last_target_block; // Track PCBLOCK locally
 
 public:
-  explicit SLHistFeature(const std::vector<std::string> &args)
-      : Feature(args), num_entries(32),
+  explicit SLHistFeature(const std::vector<std::string> &args,
+                         bool _use_pc = true)
+      : Feature(args, _use_pc), num_entries(32),
         last_target_block(0) { // Small default table
     if (args.size() < 1)
       throw std::runtime_error("SLHIST requires: hist_len [num_entries]");
@@ -589,7 +622,7 @@ public:
     size_t idx =
         (last_target_block ^ (last_target_block >> 5)) & (num_entries - 1);
     uint64_t hist = histories[idx];
-    return pc ^ hash_64(hist);
+    return use_pc ? (pc ^ hash_64(hist)) : hash_64(hist);
   }
 };
 
@@ -603,8 +636,9 @@ private:
   size_t hist_len;
 
 public:
-  explicit TLHistFeature(const std::vector<std::string> &args)
-      : Feature(args), num_entries(32) {
+  explicit TLHistFeature(const std::vector<std::string> &args,
+                         bool _use_pc = true)
+      : Feature(args, _use_pc), num_entries(32) {
     if (args.size() < 1)
       throw std::runtime_error("TLHIST requires: hist_len [num_entries]");
     hist_len = std::stoull(args[0]);
@@ -627,7 +661,8 @@ public:
 
   uint64_t get_index(uint64_t pc) const override {
     size_t idx = ((pc ^ (pc >> 5))) & (num_entries - 1);
-    return pc ^ hash_64(histories[idx]);
+    uint64_t h = hash_64(histories[idx]);
+    return use_pc ? (pc ^ h) : h;
   }
 };
 
@@ -642,8 +677,9 @@ private:
   uint64_t gh; // Internal global history
 
 public:
-  explicit QLHistFeature(const std::vector<std::string> &args)
-      : Feature(args), num_entries(16), gh(0) {
+  explicit QLHistFeature(const std::vector<std::string> &args,
+                         bool _use_pc = true)
+      : Feature(args, _use_pc), num_entries(16), gh(0) {
     if (args.size() < 1)
       throw std::runtime_error("QLHIST requires: hist_len [num_entries]");
     hist_len = std::stoull(args[0]);
@@ -670,6 +706,7 @@ public:
 
   uint64_t get_index(uint64_t pc) const override {
     size_t idx = ((pc ^ (pc >> 3))) & (num_entries - 1);
-    return pc ^ hash_64(histories[idx]);
+    uint64_t h = hash_64(histories[idx]);
+    return use_pc ? (pc ^ h) : h;
   }
 };

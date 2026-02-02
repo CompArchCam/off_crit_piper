@@ -40,6 +40,7 @@
 #include "tage/tagesc_mini.h"
 #include <cassert>
 #include <unordered_map>
+#include <unordered_set>
 
 // Struct to track predictions for comparison at resolve time
 struct PredictionTrack {
@@ -48,16 +49,25 @@ struct PredictionTrack {
   bool tage_192_pred;
   bool mini_tage_pred;
   bool my_pred;
+  int mini_tage_provider;
+  int tage64_nosc_provider;
 };
 static std::unordered_map<uint64_t, PredictionTrack> prediction_tracker;
 
 // Stats for comparison
+static std::map<int, uint64_t> mini_tage_provider_counts;
+static std::map<int, uint64_t> mini_tage_provider_correct;
+static std::map<int, uint64_t> tage64_nosc_provider_counts;
+static std::map<int, uint64_t> tage64_nosc_provider_correct;
 static uint64_t br_count = 0;
 static uint64_t tage_64_misp = 0;
 static uint64_t tage_64_nosc_misp = 0;
 static uint64_t tage_192_misp = 0;
 static uint64_t mini_tage_misp = 0;
 static uint64_t my_misp = 0;
+static std::unordered_map<uint64_t, uint8_t>
+    pc_behavior; // 0x1: Taken, 0x2: NotTaken
+static uint64_t non_trivial_pcs = 0;
 
 struct StatsPrinter {
   ~StatsPrinter() {
@@ -137,8 +147,9 @@ bool get_cond_dir_prediction(uint64_t seq_no, uint8_t piece, uint64_t pc,
   const bool tage_192_pred = tage_192_impl.predict(seq_no, piece, pc);
   const bool tage64_pred =
       tage64_no_sc::cbp2016_tage_sc_l.predict(seq_no, piece, pc);
-  const bool tage64_nosc_pred =
-      tage64_nosc::cbp2016_tage_nosc_l.predict(seq_no, piece, pc).prediction;
+  const TagePrediction tage64_nosc_obj =
+      tage64_nosc::cbp2016_tage_nosc_l.predict(seq_no, piece, pc);
+  const bool tage64_nosc_pred = tage64_nosc_obj.prediction;
 
   const bool my_prediction =
       cond_predictor_impl.predict(seq_no, piece, pc, mini_pred);
@@ -150,6 +161,8 @@ bool get_cond_dir_prediction(uint64_t seq_no, uint8_t piece, uint64_t pc,
   track.tage_192_pred = tage_192_pred;
   track.mini_tage_pred = mini_pred.prediction;
   track.my_pred = my_prediction;
+  track.mini_tage_provider = mini_pred.provider;
+  track.tage64_nosc_provider = tage64_nosc_obj.provider;
   prediction_tracker[get_unique_inst_id(seq_no, piece)] = track;
 
   return my_prediction;
@@ -279,6 +292,15 @@ void notify_instr_execute_resolve(uint64_t seq_no, uint8_t piece, uint64_t pc,
                                 _next_pc, (it->second.my_pred != _resolve_dir));
       tage_192_impl.update(seq_no, piece, pc, _resolve_dir, pred_dir, _next_pc);
 
+      uint8_t current_behavior = pc_behavior[pc];
+      uint8_t new_hit = _resolve_dir ? 1 : 2;
+      if (current_behavior != 3) {
+        pc_behavior[pc] |= new_hit;
+        if (pc_behavior[pc] == 3) {
+          non_trivial_pcs++;
+        }
+      }
+
       br_count++;
       if (it->second.tage_64_pred != _resolve_dir)
         tage_64_misp++;
@@ -291,15 +313,68 @@ void notify_instr_execute_resolve(uint64_t seq_no, uint8_t piece, uint64_t pc,
       if (it->second.my_pred != _resolve_dir)
         my_misp++;
 
+      // Update provider stats
+      mini_tage_provider_counts[it->second.mini_tage_provider]++;
+      if (it->second.mini_tage_pred == _resolve_dir) {
+        mini_tage_provider_correct[it->second.mini_tage_provider]++;
+      }
+
+      tage64_nosc_provider_counts[it->second.tage64_nosc_provider]++;
+      if (it->second.tage_64_nosc_pred == _resolve_dir) {
+        tage64_nosc_provider_correct[it->second.tage64_nosc_provider]++;
+      }
+
       if ((br_count % 100000ULL) == 0) {
-        fprintf(stderr,
-                "[COND] branches=%llu miniTAGE_misp=%llu MY_misp=%llu "
-                "64_nosc_misp=%llu 64_tage_misp=%llu 192_tage_misp=%llu\n",
-                (unsigned long long)br_count,
-                (unsigned long long)mini_tage_misp, (unsigned long long)my_misp,
-                (unsigned long long)tage_64_nosc_misp,
-                (unsigned long long)tage_64_misp,
-                (unsigned long long)tage_192_misp);
+        fprintf(
+            stderr,
+            "[COND] branches=%llu miniTAGE_misp=%llu MY_misp=%llu "
+            "64_nosc_misp=%llu 64_tage_misp=%llu 192_tage_misp=%llu "
+            "unique_pcs=%llu non_trivial_pcs=%llu\n",
+            (unsigned long long)br_count, (unsigned long long)mini_tage_misp,
+            (unsigned long long)my_misp, (unsigned long long)tage_64_nosc_misp,
+            (unsigned long long)tage_64_misp, (unsigned long long)tage_192_misp,
+            (unsigned long long)pc_behavior.size(),
+            (unsigned long long)non_trivial_pcs);
+
+        // Helper lambda to print formatted stats
+        auto print_stats = [&](const char *name,
+                               std::map<int, uint64_t> &counts,
+                               std::map<int, uint64_t> &correct_counts) {
+          fprintf(stderr, "\n[STATS] %s\n", name);
+          uint64_t total_pred = 0;
+          for (auto const &[provider, count] : counts) {
+            total_pred += count;
+          }
+
+          // Line 1: Usage Percentage
+          fprintf(stderr, "  Usage%%:   ");
+          for (auto const &[provider, count] : counts) {
+            double usage = 100.0 * (double)count / (double)total_pred;
+            if (provider == 0)
+              fprintf(stderr, " Bimodal:%.1f%%", usage);
+            else
+              fprintf(stderr, " %d:%.1f%%", provider, usage);
+          }
+          fprintf(stderr, "\n");
+
+          // Line 2: Accuracy Percentage
+          fprintf(stderr, "  Accuracy%%:");
+          for (auto const &[provider, count] : counts) {
+            uint64_t correct = correct_counts[provider];
+            double acc = 100.0 * (double)correct / (double)count;
+            if (provider == 0)
+              fprintf(stderr, " Bimodal:%.1f%%", acc);
+            else
+              fprintf(stderr, " %d:%.1f%%", provider, acc);
+          }
+          fprintf(stderr, "\n");
+        };
+
+        print_stats("MiniTage", mini_tage_provider_counts,
+                    mini_tage_provider_correct);
+        print_stats("TageNoSC", tage64_nosc_provider_counts,
+                    tage64_nosc_provider_correct);
+        fprintf(stderr, "\n");
       }
       prediction_tracker.erase(it);
 

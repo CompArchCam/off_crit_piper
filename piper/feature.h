@@ -13,23 +13,23 @@
  * prediction tables.
  */
 class Feature {
-public:
-  /**
-   * Constructor that initializes the feature with command-line style arguments.
-   * This allows for flexible configuration of features from parsed input files.
-   *
-   * @param args Vector of string arguments for feature initialization
-   *             (similar to main method args)
-   */
-  explicit Feature(const std::vector<std::string> &args) {
-    // Base class can store args or leave implementation to derived classes
-    (void)args; // Suppress unused parameter warning in base class
-  }
+protected:
+  std::string name;
+  bool use_pc;
 
-  /**
-   * Virtual destructor to ensure proper cleanup of derived classes
-   */
+public:
   virtual ~Feature() = default;
+
+  explicit Feature(const std::vector<std::string> &args, bool _use_pc = true)
+      : use_pc(_use_pc) {
+    if (args.empty()) {
+      // throw std::runtime_error("Feature requires at least a name.");
+      // Allowed: name might be passed separately or inferred
+      name = "Unknown";
+    } else {
+      name = args[0];
+    }
+  }
 
   /**
    * Update the feature state based on branch outcome.

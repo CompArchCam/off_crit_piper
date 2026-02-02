@@ -7,6 +7,8 @@
 #include "piper/features.h"
 #include "piper/fsc.h"
 #include "piper/ftrl.h"
+#include "piper/hb_ftrl.h"
+#include "piper/hbt_ftrl.h"
 #include "piper/index_manager.h"
 
 #include <algorithm>
@@ -24,28 +26,79 @@
 #include <vector>
 
 struct PredState {
-  std::vector<uint64_t> indices;
+  std::vector<uint64_t> hbt_indices;
+  std::vector<uint64_t> hb_indices;
   float sum;
 };
 
 class SampleCondPredictor {
   // Components
-  IndexManager index_manager;
-  std::unique_ptr<FTRL> ftrl;
-  std::unique_ptr<FSC> fsc;
+  IndexManager hbt_index_manager;
+  IndexManager hb_index_manager;
+
+  std::unique_ptr<HbtFTRL> hbt_ftrl;
+  std::unique_ptr<HighBranchFTRL> hb_ftrl;
+
+  std::unique_ptr<FSC> hbt_fsc;
+  std::unique_ptr<FSC> hb_fsc;
 
   // State tracking
   struct HistoryEntry {
     PredState state;
     TagePrediction tage_pred;
     bool combined_pred;
-    float fsc_sum;
+    float hbt_fsc_sum;
+    float hb_fsc_sum;
   };
   std::unordered_map<uint64_t, HistoryEntry> pred_time_histories;
 
   // --- periodic mispred reporting (main tage vs mini tage) ---
   uint64_t br_count = 0;
   uint64_t main_tage_misp = 0;
+
+  // Helper to create features based on type and args
+  std::unique_ptr<Feature> create_feature(const std::string &type,
+                                          const std::vector<std::string> &args,
+                                          bool use_pc) {
+    if (type == "PC") {
+      return std::make_unique<PCFeature>(args, use_pc);
+    } else if (type == "GHist") {
+      return std::make_unique<GHistFeature>(args, use_pc);
+    } else if (type == "GPath") {
+      return std::make_unique<GPathFeature>(args, use_pc);
+    } else if (type == "LHist") {
+      return std::make_unique<LHistFeature>(args, use_pc);
+    } else if (type == "Recency") {
+      return std::make_unique<RecencyFeature>(args, use_pc);
+    } else if (type == "RecencyPos") {
+      return std::make_unique<RecencyPosFeature>(args, use_pc);
+    } else if (type == "IMLI") {
+      return std::make_unique<IMLIFeature>(args, use_pc);
+    } else if (type == "BlurryPath") {
+      return std::make_unique<BlurryPathFeature>(args, use_pc);
+    } else if (type == "ReturnStackHist") {
+      return std::make_unique<ReturnStackHistFeature>(args, use_pc);
+    } else if (type == "BrIMLI") {
+      return std::unique_ptr<BrIMLIFeature>(new BrIMLIFeature(args, use_pc));
+    } else if (type == "TaIMLI") {
+      return std::unique_ptr<TaIMLIFeature>(new TaIMLIFeature(args, use_pc));
+    } else if (type == "PHist") {
+      return std::make_unique<PHistFeature>(args, use_pc);
+    } else if (type == "FHist") {
+      return std::make_unique<FHistFeature>(args, use_pc);
+    } else if (type == "BHist") {
+      return std::make_unique<BHistFeature>(args, use_pc);
+    } else if (type == "SLHist") {
+      return std::make_unique<SLHistFeature>(args, use_pc);
+    } else if (type == "TLHist") {
+      return std::make_unique<TLHistFeature>(args, use_pc);
+    } else if (type == "QLHist") {
+      return std::make_unique<QLHistFeature>(args, use_pc);
+    } else {
+      std::cerr << "Unknown feature type: " << type << std::endl;
+      exit(1);
+    }
+  }
 
 public:
   SampleCondPredictor(void) {}
@@ -59,7 +112,15 @@ public:
     uint64_t hbt_decay_period = 10000;
     uint8_t hbt_decay_amount = 1;
 
+    // Config for High Branch FTRL (default same as HBT or independent?)
+    // User didn't specify separate params, so reuse for now or look for
+    // separate Use same for now.
+
     bool config_loaded = false;
+
+    enum class ParseState { NONE, HBT, MANY_BRANCHES };
+    ParseState state = ParseState::NONE;
+
     if (!config_path.empty()) {
       std::ifstream infile(config_path);
       if (infile.is_open()) {
@@ -71,12 +132,17 @@ public:
           std::string type;
           iss >> type;
 
-          if (type == "ftrl") {
+          if (type == "ftrl" || type == "hbt_ftrl") {
             iss >> ftrl_alpha >> ftrl_beta >> ftrl_l1 >> ftrl_l2;
           } else if (type == "hbt") {
             iss >> hbt_decay_period >> hbt_decay_amount;
+          } else if (type == "features_hbt") {
+            state = ParseState::HBT;
+          } else if (type == "features_many_branches") {
+            state = ParseState::MANY_BRANCHES;
           } else if (type == "features") {
-            // section header, ignore
+            // Legacy support: default to HBT
+            state = ParseState::HBT;
           } else {
             // Feature declaration: Name arg1 arg2 ...
             std::vector<std::string> args;
@@ -85,48 +151,18 @@ public:
               args.push_back(arg);
             }
 
-            if (type == "PC") {
-              index_manager.add_feature(std::make_unique<PCFeature>(args));
-            } else if (type == "GHist") {
-              index_manager.add_feature(std::make_unique<GHistFeature>(args));
-            } else if (type == "GPath") {
-              index_manager.add_feature(std::make_unique<GPathFeature>(args));
-            } else if (type == "LHist") {
-              index_manager.add_feature(std::make_unique<LHistFeature>(args));
-            } else if (type == "Recency") {
-              index_manager.add_feature(std::make_unique<RecencyFeature>(args));
-            } else if (type == "RecencyPos") {
-              index_manager.add_feature(
-                  std::make_unique<RecencyPosFeature>(args));
-            } else if (type == "IMLI") {
-              index_manager.add_feature(std::make_unique<IMLIFeature>(args));
-            } else if (type == "BlurryPath") {
-              index_manager.add_feature(
-                  std::make_unique<BlurryPathFeature>(args));
-            } else if (type == "ReturnStackHist") {
-              index_manager.add_feature(
-                  std::make_unique<ReturnStackHistFeature>(args));
-            } else if (type == "BrIMLI") {
-              index_manager.add_feature(
-                  std::unique_ptr<BrIMLIFeature>(new BrIMLIFeature(args)));
-            } else if (type == "TaIMLI") {
-              index_manager.add_feature(
-                  std::unique_ptr<TaIMLIFeature>(new TaIMLIFeature(args)));
-            } else if (type == "PHist") {
-              index_manager.add_feature(std::make_unique<PHistFeature>(args));
-            } else if (type == "FHist") {
-              index_manager.add_feature(std::make_unique<FHistFeature>(args));
-            } else if (type == "BHist") {
-              index_manager.add_feature(std::make_unique<BHistFeature>(args));
-            } else if (type == "SLHist") {
-              index_manager.add_feature(std::make_unique<SLHistFeature>(args));
-            } else if (type == "TLHist") {
-              index_manager.add_feature(std::make_unique<TLHistFeature>(args));
-            } else if (type == "QLHist") {
-              index_manager.add_feature(std::make_unique<QLHistFeature>(args));
+            if (state == ParseState::HBT) {
+              // HBT features use PC by default
+              hbt_index_manager.add_feature(create_feature(type, args, true));
+            } else if (state == ParseState::MANY_BRANCHES) {
+              // Many branches features do NOT use PC by default
+              hb_index_manager.add_feature(create_feature(type, args, false));
             } else {
-              std::cerr << "Unknown feature type: " << type << std::endl;
-              exit(1);
+              // Ignore or error if no section defined?
+              // Legacy support: if features seen before section, discard or
+              // adding to default HBT? Let's assume HBT if unspecified to avoid
+              // breakage
+              hbt_index_manager.add_feature(create_feature(type, args, true));
             }
           }
         }
@@ -139,20 +175,28 @@ public:
 
     assert(config_loaded);
 
-    // 2. Initialize FTRL
-    ftrl = std::unique_ptr<FTRL>(
-        new FTRL(index_manager.get_num_features(), ftrl_alpha, ftrl_beta,
-                 ftrl_l1, ftrl_l2, hbt_decay_period, hbt_decay_amount));
+    // 2. Initialize FTRLs
+    hbt_ftrl = std::make_unique<HbtFTRL>(
+        hbt_index_manager.get_num_features(), ftrl_alpha, ftrl_beta, ftrl_l1,
+        ftrl_l2, hbt_decay_period, hbt_decay_amount);
 
-    // 3. Initialize FSC (fast path cache)
-    // Use tag bits: 8 bits for all
-    // 3. Initialize FSC (fast path cache)
-    // Use tag bits: 8 bits for all
+    hb_ftrl = std::make_unique<HighBranchFTRL>(
+        hb_index_manager.get_num_features(), ftrl_alpha, ftrl_beta, ftrl_l1,
+        ftrl_l2);
+
+    // 3. Initialize FSCs
     int tag_size = 12;
-    fsc = std::unique_ptr<FSC>(
-        new FSC(index_manager.get_num_features(), tag_size));
+    // HBT FSC: Always Replace
+    hbt_fsc = std::unique_ptr<FSC>(
+        new FSC(hbt_index_manager.get_num_features(), tag_size,
+                FSC::AllocationPolicy::ALWAYS_REPLACE));
+    // High Branch FSC: Check Magnitude
+    /* hb_fsc = std::unique_ptr<FSC>(
+        new FSC(hb_index_manager.get_num_features(), tag_size,
+                FSC::AllocationPolicy::CHECK_MAGNITUDE)); */
 
-    printf("FSC Size: %zu bits\n", fsc->get_size());
+    printf("HBT FSC Size: %zu bits\n", hbt_fsc->get_size());
+    /* printf("HB FSC Size: %zu bits\n", hb_fsc->get_size()); */
   }
 
   void terminate() {}
@@ -167,11 +211,15 @@ public:
                const TagePrediction &tage_pred) {
 
     // 1. Get Indices
-    std::vector<uint64_t> indices;
-    index_manager.get_indices(PC, indices);
+    std::vector<uint64_t> hbt_indices;
+    hbt_index_manager.get_indices(PC, hbt_indices);
 
-    // 2. Get FSC Prediction (Sum of weights)
-    float fsc_sum = fsc->get_prediction(indices);
+    std::vector<uint64_t> hb_indices;
+    hb_index_manager.get_indices(PC, hb_indices);
+
+    // 2. Get FSC Predictions
+    float hbt_fsc_sum = hbt_fsc->get_prediction(hbt_indices);
+    // float hb_fsc_sum = hb_fsc->get_prediction(hb_indices);
 
     // 3. Get Tage Signed Weight
     float tage_weight = 0.0f;
@@ -181,29 +229,37 @@ public:
     if (confidence == 2)
       tage_weight = 0.9f; // High
     else if (confidence == 1)
-      tage_weight = 0.4f; // Med (was 0.75)
+      tage_weight = 0.4f; // Med
     else
-      tage_weight = 0.2f; // Low (was 0.5)
+      tage_weight = 0.2f; // Low
 
     tage_weight *= sign;
 
     // 4. Combine
     float total_sum = tage_weight;
-    if (fsc->get_conf(PC)) {
-      total_sum += fsc_sum;
+    // Add HBT FSC
+    // Note: get_conf was always true in previous version
+    if (hbt_fsc->get_conf(PC)) {
+      total_sum += hbt_fsc_sum;
     }
+    // Add HB FSC (no skew gating/conf check mentioned, just add?)
+    // User: "add them both together etc etc etc"
+    // total_sum += hb_fsc_sum;
+
     bool final_pred = (total_sum >= 0);
 
     // 5. Sto§re State for Update
     PredState state;
-    state.indices = std::move(indices);
+    state.hbt_indices = std::move(hbt_indices);
+    state.hb_indices = std::move(hb_indices);
     state.sum = total_sum;
 
     HistoryEntry entry;
     entry.state = std::move(state);
     entry.tage_pred = tage_pred;
     entry.combined_pred = final_pred;
-    entry.fsc_sum = fsc_sum;
+    entry.hbt_fsc_sum = hbt_fsc_sum;
+    // entry.hb_fsc_sum = hb_fsc_sum;
 
     pred_time_histories.emplace(get_unique_inst_id(seq_no, piece),
                                 std::move(entry));
@@ -214,12 +270,10 @@ public:
   void history_update(uint64_t seq_no, uint8_t piece, uint64_t PC, bool taken,
                       uint64_t nextPC) {
     // Update all features
-    // Note: InstClass not passed here in sample interface?
-    // spec_update in interface passes inst_class but history_update signature
-    // here doesn't have it. We can assume condBranch for now or update
-    // signature. The interface calls this only for cond branches.
-    index_manager.update_features(InstClass::condBranchInstClass, PC, taken,
-                                  nextPC);
+    hbt_index_manager.update_features(InstClass::condBranchInstClass, PC, taken,
+                                      nextPC);
+    hb_index_manager.update_features(InstClass::condBranchInstClass, PC, taken,
+                                     nextPC);
   }
 
   void update(uint64_t seq_no, uint8_t piece, uint64_t PC, bool resolveDir,
@@ -236,22 +290,32 @@ public:
     if (entry.tage_pred.prediction != resolveDir)
       main_tage_misp++;
 
-    // Train FTRL (Update weights in full model)
-    // Use the indices we captured at prediction time
-    // User request: "return the prob as 1.0f / (1.0f + std::exp(-dot)); as the
-    // pred float instead of this predDir ? 1.0f : 0.0f"
+    // Train FTRL (Update weights)
     float prob = 1.0f / (1.0f + std::exp(-state.sum));
-    ftrl->update(state.indices, prob, resolveDir, cycle, PC, entry.tage_pred);
 
-    // If FSC was incorrect, zero out its weights so FTRL can refresh them
-    bool fsc_pred_dir = (entry.fsc_sum >= 0.0f);
-    bool fsc_correct = (fsc_pred_dir == resolveDir);
+    // Train HBT FTRL
+    hbt_ftrl->update(state.hbt_indices, prob, resolveDir, cycle, PC,
+                     entry.tage_pred);
+
+    // Train HB FTRL
+    /* hb_ftrl->update(state.hb_indices, prob, resolveDir, cycle, PC,
+                    entry.tage_pred); */
+
+    // Update Skew (using HBT FSC? Only HBT FSC had get_conf usage in predict)
+    // Assuming skew logic applies to the aggregate or just HBT?
+    // Usually FSC is about cached weights. Both have weights.
+    // Let's update skew using the aggregate prediction for now or just skip
+    // exact skew logic if undefined. Original: fsc->update_skew(PC,
+    // tage_correct, fsc_correct); Here we have TWO FSCs.
+
     bool tage_correct = (entry.tage_pred.prediction == resolveDir);
+    // Which FSC correctness?
+    bool hbt_fsc_correct = ((entry.hbt_fsc_sum >= 0) == resolveDir);
+    hbt_fsc->update_skew(PC, tage_correct, hbt_fsc_correct);
 
-    fsc->update_skew(PC, tage_correct, fsc_correct);
-    // if (!fsc_correct) {
-    // fsc->update_weights_fast(state.indices, resolveDir);
-    //}
+    // hb_fsc doesn't have skew gating in predict currently, so maybe no need to
+    // update skew? Or maybe it should have skew. Leaving as is (only HBT FSC
+    // has skew).
 
     pred_time_histories.erase(it);
   }
@@ -259,22 +323,27 @@ public:
   // Called at commit time to move 1 weight from FTRL to FSC
   void commit(uint64_t seq_no, uint8_t piece, uint64_t pc, bool pred_dir,
               bool resolve_dir) {
-    // if (!ftrl) return;
-
-    // ActiveWeight entry;
-    // ftrl->pop_active_weight(entry);
-    // fsc->allocate(entry.hash, entry.feature_idx, entry.weight);
+    // Unused in provided snippet
   }
 
   void timestep(uint64_t cycle) {
     if (cycle < 20)
       return;
     uint64_t threshold = cycle - 20;
+
+    // Transfer HBT weights
     std::vector<ActiveWeight> old_weights;
-    ftrl->pop_active_weights_older_than(threshold, old_weights);
+    hbt_ftrl->pop_active_weights_older_than(threshold, old_weights);
     for (const auto &w : old_weights) {
-      fsc->allocate(w.hash, w.feature_idx, w.weight);
+      hbt_fsc->allocate(w.hash, w.feature_idx, w.weight);
     }
+
+    // Transfer HB weights
+    /* old_weights.clear();
+    hb_ftrl->pop_active_weights_older_than(threshold, old_weights);
+    for (const auto &w : old_weights) {
+      hb_fsc->allocate(w.hash, w.feature_idx, w.weight);
+    } */
   }
 
   void print_performance() const {}

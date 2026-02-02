@@ -9,10 +9,14 @@
 #include <vector>
 
 class FSC {
+public:
+  static constexpr int WEIGHT_BITS = 8;
+  static constexpr float WEIGHT_SCALE = static_cast<float>(1 << WEIGHT_BITS);
+
 private:
   struct FscEntry {
     uint16_t tag = 0;
-    float weight = 0.0f;
+    int16_t weight = 0;
     // Could add valid bit, but weight 0.0f or initial tag could serve?
     // Better to have explicit empty state or initialization.
     // Let's use weight 0.0f as implicit empty or just overwrite.
@@ -33,6 +37,20 @@ private:
   std::vector<SkewEntry> skew_table;
   int tag_size;
 
+public:
+  enum class AllocationPolicy { ALWAYS_REPLACE, CHECK_MAGNITUDE };
+
+private:
+  AllocationPolicy alloc_policy;
+
+  static float fixed_to_float(int16_t w) {
+    return static_cast<float>(w) / WEIGHT_SCALE;
+  }
+
+  static int16_t float_to_fixed(float f) {
+    return static_cast<int16_t>(std::round(f * WEIGHT_SCALE));
+  }
+
   // Helper: Compute tag from raw index
   uint16_t compute_tag(uint64_t index) const {
     // Simple tag derivation: mix index or just shift
@@ -47,7 +65,8 @@ private:
   size_t get_set(uint64_t index) const { return index % NUM_SETS; }
 
 public:
-  FSC(size_t num_features, int _tag_size) : tag_size(_tag_size) {
+  FSC(size_t num_features, int _tag_size, AllocationPolicy policy)
+      : tag_size(_tag_size), alloc_policy(policy) {
     tables.resize(num_features);
     for (auto &table : tables) {
       table.resize(NUM_SETS * NUM_WAYS);
@@ -101,8 +120,8 @@ public:
 
       for (size_t w = 0; w < NUM_WAYS; ++w) {
         const auto &entry = table[base + w];
-        if (entry.weight != 0.0f && entry.tag == tag) {
-          sum += entry.weight;
+        if (entry.weight != 0 && entry.tag == tag) {
+          sum += fixed_to_float(entry.weight);
           break; // Assumes only one match per set (enforced by allocation)
         }
       }
@@ -122,7 +141,7 @@ public:
     // 1. Check for existing match to update
     for (size_t w = 0; w < NUM_WAYS; ++w) {
       if (table[base + w].tag == tag) {
-        table[base + w].weight = weight;
+        table[base + w].weight = float_to_fixed(weight);
         return;
       }
     }
@@ -133,7 +152,7 @@ public:
     // 2. Find empty slot
     int victim_way = -1;
     for (size_t w = 0; w < NUM_WAYS; ++w) {
-      if (table[base + w].weight == 0.0f) {
+      if (table[base + w].weight == 0) {
         victim_way = w;
         break;
       }
@@ -141,12 +160,21 @@ public:
 
     // 3. If no empty slot, find smallest absolute weight
     if (victim_way == -1) {
-      float min_abs_weight = std::numeric_limits<float>::max();
+      int16_t min_abs_weight = std::numeric_limits<int16_t>::max();
       for (size_t w = 0; w < NUM_WAYS; ++w) {
-        float abs_w = std::abs(table[base + w].weight);
+        int16_t abs_w = std::abs(table[base + w].weight);
         if (abs_w < min_abs_weight) {
           min_abs_weight = abs_w;
           victim_way = w;
+        }
+      }
+
+      // Check policy if we are replacing an occupied slot
+      if (alloc_policy == AllocationPolicy::CHECK_MAGNITUDE) {
+        int16_t incoming_mag = std::abs(float_to_fixed(weight));
+        if (incoming_mag <= min_abs_weight) {
+          return; // Don't allocate if new weight is not bigger than smallest
+                  // existing
         }
       }
     }
@@ -154,7 +182,7 @@ public:
     // 4. Update victim
     if (victim_way != -1) {
       table[base + victim_way].tag = tag;
-      table[base + victim_way].weight = weight;
+      table[base + victim_way].weight = float_to_fixed(weight);
     }
   }
   // Zero weights that disagreed with the actual outcome
@@ -171,12 +199,12 @@ public:
 
       for (size_t w = 0; w < NUM_WAYS; ++w) {
         if (table[base + w].tag == tag) {
-          float weight = table[base + w].weight;
+          int16_t weight = table[base + w].weight;
           // If taken (true), we want positive weights. If weight < 0, zero it.
           // If not taken (false), we want negative weights. If weight > 0, zero
           // it.
-          if ((taken && weight < 0.0f) || (!taken && weight > 0.0f)) {
-            table[base + w].weight = 0.0f;
+          if ((taken && weight < 0) || (!taken && weight > 0)) {
+            table[base + w].weight = 0;
           }
           break;
         }

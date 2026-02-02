@@ -22,21 +22,35 @@ def run_cbp(config_path, trace_path, timeout=600):
 def parse_cbp_output(stdout):
     """
     Parses the stdout from CBP to extract misprediction counts.
-    Expected format line: "ReferenceMispred/Mispred: <combined>/<tage>"
-    Returns: (combined_mispredictions, tage_mispredictions)
+    Expected format is the FINAL_MISPREDICTIONS section.
+    Returns: dictionary mapping predictor names to their misprediction counts.
     """
-    match = re.search(r'Combined Misp/Tage Misp:\s+(\d+)/(\d+)', stdout)
-    if match:
-        combined_misp = int(match.group(1))
-        tage_misp = int(match.group(2))
-        return combined_misp, tage_misp
-    return None, None
+    results = {}
+    if "FINAL_MISPREDICTIONS:" in stdout:
+        section = stdout.split("FINAL_MISPREDICTIONS:")[1]
+        lines = section.strip().split("\n")
+        for line in lines:
+            if ":" in line:
+                key, val = line.split(":")
+                try:
+                    results[key.strip()] = int(val.strip())
+                except ValueError:
+                    continue
+    
+    if not results:
+        raise ValueError("Could not find FINAL_MISPREDICTIONS section in CBP output")
+            
+    return results
 
-def calculate_cost(combined_misp, tage_misp):
+def calculate_cost(misp_dict):
     """
     Calculates the cost function for optimization.
-    Returns: combined_misp / tage_misp
+    Formula: cond_predictor_impl / cbp2016_tage_sc_l
     """
-    if tage_misp == 0:
-        return 1.0 # Should not happen usually, but avoid div by zero
-    return combined_misp / tage_misp
+    my_misp = misp_dict['cond_predictor_impl']
+    ref_misp = misp_dict['cbp2016_tage_sc_l']
+        
+    if ref_misp == 0:
+        return 1.0 # Avoid division by zero
+        
+    return my_misp / ref_misp

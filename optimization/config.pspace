@@ -1,11 +1,10 @@
 # FTRL Hyperparameters
 # Format: ftrl {float alpha_min alpha_max} {float beta_min beta_max} {float l1_min l1_max} {float l2_min l2_max}
 ftrl {float 0.05 3.0} {float 0.05 3.0} {float 0.0 8.0} {float 0.0 8.0}
-bloom {int 500 5000}
 hbt {int 500 5000} {int 1 15}
 
 # Feature Configuration
-features
+features_hbt
 
 # PC-based feature (no parameters)
 {optional ENABLE_PC_0 PC}
@@ -73,3 +72,5 @@ features
 
 # QLHist (Fourth Local History)
 {optional ENABLE_QLHIST_0 QLHist {int 4 16} {int 8 32}}
+
+features_many_branches

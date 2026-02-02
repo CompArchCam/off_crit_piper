@@ -68,13 +68,13 @@ def evaluate(config, seed: int = 0) -> float:
                     # logger.debug(stderr) 
                     return 1e9 # High cost for failure
 
-                combined, tage = parse_cbp_output(stdout)
+                misp_dict = parse_cbp_output(stdout)
                 
-                if combined is None or tage is None:
+                if not misp_dict:
                     logger.error(f"Failed to parse output on {trace_path}")
                     return 1e9
                 
-                cost = calculate_cost(combined, tage)
+                cost = calculate_cost(misp_dict)
                 costs.append(cost)
 
             except Exception as e:
