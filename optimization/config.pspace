@@ -50,7 +50,26 @@ features
 {optional ENABLE_RETURN_STACK_HIST_1 ReturnStackHist {int 20 64}}
 
 # BrIMLI Features - Branch Immediate Loop Iteration
-{optional ENABLE_BRIMLI_0 BrIMLI}
+{optional ENABLE_BRIMLI_0 BrIMLI {int 4 10}}
 
 # TaIMLI Features - Target Inner-Most Loop Iteration
-{optional ENABLE_TAIMLI_0 TaIMLI}
+{optional ENABLE_TAIMLI_0 TaIMLI {int 4 10}}
+
+# PHist (Path History)
+{optional ENABLE_PHIST_0 PHist {int 10 40} {int 1 3}}
+{optional ENABLE_PHIST_1 PHist {int 40 100} {int 1 3}}
+
+# FHist (Forward History)
+{optional ENABLE_FHIST_0 FHist {int 5 30}}
+
+# BHist (Backward History)
+{optional ENABLE_BHIST_0 BHist {int 5 30}}
+
+# SLHist (Second Local History) - history length, number of entries
+{optional ENABLE_SLHIST_0 SLHist {int 4 16} {int 64 256}}
+
+# TLHist (Third Local History)
+{optional ENABLE_TLHIST_0 TLHist {int 4 16} {int 16 64}}
+
+# QLHist (Fourth Local History)
+{optional ENABLE_QLHIST_0 QLHist {int 4 16} {int 8 32}}
