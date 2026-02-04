@@ -7,7 +7,6 @@
 #include "piper/features.h"
 #include "piper/fsc.h"
 #include "piper/ftrl.h"
-#include "piper/hb_ftrl.h"
 #include "piper/hbt_ftrl.h"
 #include "piper/index_manager.h"
 
@@ -26,29 +25,26 @@
 #include <vector>
 
 struct PredState {
-  std::vector<uint64_t> hbt_indices;
-  std::vector<uint64_t> hb_indices;
+  std::vector<Index> hbt_indices;
   float sum;
 };
 
 class SampleCondPredictor {
   // Components
   IndexManager hbt_index_manager;
-  IndexManager hb_index_manager;
 
   std::unique_ptr<HbtFTRL> hbt_ftrl;
-  std::unique_ptr<HighBranchFTRL> hb_ftrl;
 
   std::unique_ptr<FSC> hbt_fsc;
-  std::unique_ptr<FSC> hb_fsc;
 
   // State tracking
   struct HistoryEntry {
     PredState state;
+    branch_info bi;
     TagePrediction tage_pred;
     bool combined_pred;
     float hbt_fsc_sum;
-    float hb_fsc_sum;
+    float tage_weight;
   };
   std::unordered_map<uint64_t, HistoryEntry> pred_time_histories;
 
@@ -112,13 +108,10 @@ public:
     uint64_t hbt_decay_period = 10000;
     uint8_t hbt_decay_amount = 1;
 
-    // Config for High Branch FTRL (default same as HBT or independent?)
-    // User didn't specify separate params, so reuse for now or look for
-    // separate Use same for now.
-
     bool config_loaded = false;
 
-    enum class ParseState { NONE, HBT, MANY_BRANCHES };
+    // Default to HBT mode
+    enum class ParseState { NONE, HBT };
     ParseState state = ParseState::NONE;
 
     if (!config_path.empty()) {
@@ -136,12 +129,7 @@ public:
             iss >> ftrl_alpha >> ftrl_beta >> ftrl_l1 >> ftrl_l2;
           } else if (type == "hbt") {
             iss >> hbt_decay_period >> hbt_decay_amount;
-          } else if (type == "features_hbt") {
-            state = ParseState::HBT;
-          } else if (type == "features_many_branches") {
-            state = ParseState::MANY_BRANCHES;
-          } else if (type == "features") {
-            // Legacy support: default to HBT
+          } else if (type == "features_hbt" || type == "features") {
             state = ParseState::HBT;
           } else {
             // Feature declaration: Name arg1 arg2 ...
@@ -151,19 +139,8 @@ public:
               args.push_back(arg);
             }
 
-            if (state == ParseState::HBT) {
-              // HBT features use PC by default
-              hbt_index_manager.add_feature(create_feature(type, args, true));
-            } else if (state == ParseState::MANY_BRANCHES) {
-              // Many branches features do NOT use PC by default
-              hb_index_manager.add_feature(create_feature(type, args, false));
-            } else {
-              // Ignore or error if no section defined?
-              // Legacy support: if features seen before section, discard or
-              // adding to default HBT? Let's assume HBT if unspecified to avoid
-              // breakage
-              hbt_index_manager.add_feature(create_feature(type, args, true));
-            }
+            // HBT features use PC by default
+            hbt_index_manager.add_feature(create_feature(type, args, true));
           }
         }
         config_loaded = true;
@@ -176,27 +153,22 @@ public:
     assert(config_loaded);
 
     // 2. Initialize FTRLs
-    hbt_ftrl = std::make_unique<HbtFTRL>(
-        hbt_index_manager.get_num_features(), ftrl_alpha, ftrl_beta, ftrl_l1,
-        ftrl_l2, hbt_decay_period, hbt_decay_amount);
+    std::vector<std::optional<uint64_t>> feature_sizes =
+        hbt_index_manager.get_sizes();
 
-    hb_ftrl = std::make_unique<HighBranchFTRL>(
-        hb_index_manager.get_num_features(), ftrl_alpha, ftrl_beta, ftrl_l1,
-        ftrl_l2);
+    hbt_ftrl =
+        std::make_unique<HbtFTRL>(feature_sizes, ftrl_alpha, ftrl_beta, ftrl_l1,
+                                  ftrl_l2, hbt_decay_period, hbt_decay_amount);
 
     // 3. Initialize FSCs
     int tag_size = 12;
-    // HBT FSC: Always Replace
-    hbt_fsc = std::unique_ptr<FSC>(
-        new FSC(hbt_index_manager.get_num_features(), tag_size,
-                FSC::AllocationPolicy::ALWAYS_REPLACE));
-    // High Branch FSC: Check Magnitude
-    /* hb_fsc = std::unique_ptr<FSC>(
-        new FSC(hb_index_manager.get_num_features(), tag_size,
-                FSC::AllocationPolicy::CHECK_MAGNITUDE)); */
+    hbt_fsc = std::unique_ptr<FSC>(new FSC(
+        feature_sizes, tag_size, FSC::AllocationPolicy::CHECK_MAGNITUDE));
 
-    printf("HBT FSC Size: %zu bits\n", hbt_fsc->get_size());
-    /* printf("HB FSC Size: %zu bits\n", hb_fsc->get_size()); */
+    printf("HBT FSC Size: %zu bits %zu KB\n", hbt_fsc->get_size(),
+           hbt_fsc->get_size() / 1024 / 8);
+    printf("HBT FTRL Size: %zu bits %zu KB\n", hbt_ftrl->size_bits(),
+           hbt_ftrl->size_bits() / 8 / 1024);
   }
 
   void terminate() {}
@@ -210,22 +182,33 @@ public:
   bool predict(uint64_t seq_no, uint8_t piece, uint64_t PC,
                const TagePrediction &tage_pred) {
 
-    // 1. Get Indices
-    std::vector<uint64_t> hbt_indices;
-    hbt_index_manager.get_indices(PC, hbt_indices);
+    // 0. Construct Branch Info
+    branch_info bi;
+    bi.pc = PC;
+    bi.target = 0; // Target unknown at prediction
+    // Assuming high confidence if confidence counter is maxed (e.g. 3 for
+    // 2-bit? TAGE usually has counters) TAGE usually has 3-bit counters (0..7)
+    // or similar. The existing code Checks 2 -> High, 1 -> Med. Max seems to be
+    // 3 in existing code print? "if (confidence == 3)" is used.
+    bi.tage_conf = (tage_pred.confidence >= 3);
+    bi.hcpred = tage_pred.hcpred;
+    bi.longestmatchpred = tage_pred.longestmatchpred;
 
-    std::vector<uint64_t> hb_indices;
-    hb_index_manager.get_indices(PC, hb_indices);
+    // 1. Get Indices
+    std::vector<Index> hbt_indices;
+    hbt_index_manager.get_indices(bi, hbt_indices);
 
     // 2. Get FSC Predictions
     float hbt_fsc_sum = hbt_fsc->get_prediction(hbt_indices);
-    // float hb_fsc_sum = hb_fsc->get_prediction(hb_indices);
 
     // 3. Get Tage Signed Weight
     float tage_weight = 0.0f;
     float sign = tage_pred.prediction ? 1.0f : -1.0f;
     int confidence = tage_pred.confidence;
 
+    if (confidence == 3) {
+      std::cout << "confidence: " << confidence << std::endl;
+    }
     if (confidence == 2)
       tage_weight = 0.9f; // High
     else if (confidence == 1)
@@ -242,24 +225,21 @@ public:
     if (hbt_fsc->get_conf(PC)) {
       total_sum += hbt_fsc_sum;
     }
-    // Add HB FSC (no skew gating/conf check mentioned, just add?)
-    // User: "add them both together etc etc etc"
-    // total_sum += hb_fsc_sum;
 
     bool final_pred = (total_sum >= 0);
 
     // 5. Sto§re State for Update
     PredState state;
     state.hbt_indices = std::move(hbt_indices);
-    state.hb_indices = std::move(hb_indices);
     state.sum = total_sum;
 
     HistoryEntry entry;
     entry.state = std::move(state);
+    entry.bi = bi;
     entry.tage_pred = tage_pred;
     entry.combined_pred = final_pred;
     entry.hbt_fsc_sum = hbt_fsc_sum;
-    // entry.hb_fsc_sum = hb_fsc_sum;
+    entry.tage_weight = tage_weight;
 
     pred_time_histories.emplace(get_unique_inst_id(seq_no, piece),
                                 std::move(entry));
@@ -269,11 +249,15 @@ public:
 
   void history_update(uint64_t seq_no, uint8_t piece, uint64_t PC, bool taken,
                       uint64_t nextPC) {
+
+    branch_info bi;
+    bi.pc = PC;
+    bi.target = nextPC;
+    bi.tage_conf = false; // Not available/needed for history update usually
+
     // Update all features
-    hbt_index_manager.update_features(InstClass::condBranchInstClass, PC, taken,
-                                      nextPC);
-    hb_index_manager.update_features(InstClass::condBranchInstClass, PC, taken,
-                                     nextPC);
+    hbt_index_manager.update_features(InstClass::condBranchInstClass, taken,
+                                      bi);
   }
 
   void update(uint64_t seq_no, uint8_t piece, uint64_t PC, bool resolveDir,
@@ -295,27 +279,7 @@ public:
 
     // Train HBT FTRL
     hbt_ftrl->update(state.hbt_indices, prob, resolveDir, cycle, PC,
-                     entry.tage_pred);
-
-    // Train HB FTRL
-    /* hb_ftrl->update(state.hb_indices, prob, resolveDir, cycle, PC,
-                    entry.tage_pred); */
-
-    // Update Skew (using HBT FSC? Only HBT FSC had get_conf usage in predict)
-    // Assuming skew logic applies to the aggregate or just HBT?
-    // Usually FSC is about cached weights. Both have weights.
-    // Let's update skew using the aggregate prediction for now or just skip
-    // exact skew logic if undefined. Original: fsc->update_skew(PC,
-    // tage_correct, fsc_correct); Here we have TWO FSCs.
-
-    bool tage_correct = (entry.tage_pred.prediction == resolveDir);
-    // Which FSC correctness?
-    bool hbt_fsc_correct = ((entry.hbt_fsc_sum >= 0) == resolveDir);
-    hbt_fsc->update_skew(PC, tage_correct, hbt_fsc_correct);
-
-    // hb_fsc doesn't have skew gating in predict currently, so maybe no need to
-    // update skew? Or maybe it should have skew. Leaving as is (only HBT FSC
-    // has skew).
+                     entry.tage_pred, entry.tage_weight);
 
     pred_time_histories.erase(it);
   }
@@ -335,15 +299,8 @@ public:
     std::vector<ActiveWeight> old_weights;
     hbt_ftrl->pop_active_weights_older_than(threshold, old_weights);
     for (const auto &w : old_weights) {
-      hbt_fsc->allocate(w.hash, w.feature_idx, w.weight);
+      hbt_fsc->allocate(w.index, w.feature_idx, w.weight);
     }
-
-    // Transfer HB weights
-    /* old_weights.clear();
-    hb_ftrl->pop_active_weights_older_than(threshold, old_weights);
-    for (const auto &w : old_weights) {
-      hb_fsc->allocate(w.hash, w.feature_idx, w.weight);
-    } */
   }
 
   void print_performance() const {}

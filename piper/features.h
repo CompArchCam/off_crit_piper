@@ -17,14 +17,16 @@ public:
   explicit PCFeature(const std::vector<std::string> &args, bool _use_pc = true)
       : Feature(args, _use_pc) {}
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
-    (void)pc;
+    (void)bi;
     (void)actual_outcome;
   }
 
-  uint64_t get_index(uint64_t pc) const override { return use_pc ? pc : 0; }
+  uint64_t get_index(const branch_info &bi) const override {
+    return use_pc ? bi.pc : 0;
+  }
 };
 
 // ============================================================================
@@ -51,16 +53,16 @@ public:
     history.require(hist_len);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
-    uint8_t pattern = compute_5bit_pattern(pc, actual_outcome);
+    uint8_t pattern = compute_5bit_pattern(bi.pc, actual_outcome);
     history.update(pattern);
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     uint64_t h = history.get_hash(hist_len);
-    return use_pc ? (pc ^ h) : h;
+    return use_pc ? (bi.pc ^ h) : h;
   }
 };
 
@@ -84,19 +86,19 @@ public:
       history.require(entries);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
     (void)actual_outcome;
-    uint64_t hashed = hash_64(pc);
+    uint64_t hashed = hash_64(bi.pc);
     uint8_t pattern = hashed & ((1 << bits_per_pc) - 1);
     history.update(pattern);
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     uint64_t h = 0;
     if (use_pc)
-      h = pc;
+      h = bi.pc;
     if (entries > 0)
       h ^= history.get_hash(entries);
     return h;
@@ -139,17 +141,17 @@ public:
     }
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
-    size_t idx = hash_64(pc) % num_entries;
+    size_t idx = hash_64(bi.pc) % num_entries;
     histories[idx].update(actual_outcome);
   }
 
-  uint64_t get_index(uint64_t pc) const override {
-    size_t idx = hash_64(pc) % num_entries;
+  uint64_t get_index(const branch_info &bi) const override {
+    size_t idx = hash_64(bi.pc) % num_entries;
     uint64_t h = histories[idx].hash();
-    return use_pc ? (pc ^ h) : h;
+    return use_pc ? (bi.pc ^ h) : h;
   }
 };
 
@@ -171,11 +173,11 @@ public:
     }
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
 
-    bool backward = (pc & 0x80000000) != 0;
+    bool backward = (bi.pc & 0x80000000) != 0;
 
     if (is_backward) {
       if (backward) {
@@ -188,8 +190,8 @@ public:
     }
   }
 
-  uint64_t get_index(uint64_t pc) const override {
-    return use_pc ? (pc ^ counter) : counter;
+  uint64_t get_index(const branch_info &bi) const override {
+    return use_pc ? (bi.pc ^ counter) : counter;
   }
 };
 
@@ -213,17 +215,17 @@ public:
     stack.resize(stack_depth, 0);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
     (void)actual_outcome;
 
     for (size_t i = 0; i < stack_depth; ++i) {
-      if (stack[i] == pc) {
+      if (stack[i] == bi.pc) {
         for (size_t j = i; j > 0; --j) {
           stack[j] = stack[j - 1];
         }
-        stack[0] = pc;
+        stack[0] = bi.pc;
         return;
       }
     }
@@ -231,11 +233,11 @@ public:
     for (size_t i = stack_depth - 1; i > 0; --i) {
       stack[i] = stack[i - 1];
     }
-    stack[0] = pc;
+    stack[0] = bi.pc;
   }
 
-  uint64_t get_index(uint64_t pc) const override {
-    uint64_t h = use_pc ? pc : 0;
+  uint64_t get_index(const branch_info &bi) const override {
+    uint64_t h = use_pc ? bi.pc : 0;
     for (size_t i = 0; i < stack_depth; ++i) {
       h = (h << addr_shift) ^ hash_64(stack[i]);
     }
@@ -261,17 +263,17 @@ public:
     stack.resize(search_depth, 0);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
     (void)actual_outcome;
 
     for (size_t i = 0; i < search_depth; ++i) {
-      if (stack[i] == pc) {
+      if (stack[i] == bi.pc) {
         for (size_t j = i; j > 0; --j) {
           stack[j] = stack[j - 1];
         }
-        stack[0] = pc;
+        stack[0] = bi.pc;
         return;
       }
     }
@@ -279,19 +281,19 @@ public:
     for (size_t i = search_depth - 1; i > 0; --i) {
       stack[i] = stack[i - 1];
     }
-    stack[0] = pc;
+    stack[0] = bi.pc;
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     // Find position of PC in stack
     size_t pos = search_depth;
     for (size_t i = 0; i < search_depth; ++i) {
-      if (stack[i] == pc) {
+      if (stack[i] == bi.pc) {
         pos = i;
         break;
       }
     }
-    return use_pc ? (pc ^ pos) : pos;
+    return use_pc ? (bi.pc ^ pos) : pos;
   }
 };
 
@@ -318,21 +320,21 @@ public:
     history.require(num_regions);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
     (void)actual_outcome;
 
-    uint64_t region = hash_64(pc >> shift_amount) & 0xFF;
+    uint64_t region = hash_64(bi.pc >> shift_amount) & 0xFF;
     if (region != current_region) {
       history.update(static_cast<uint8_t>(current_region));
       current_region = region;
     }
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     uint64_t h = history.get_hash(num_regions);
-    return use_pc ? (pc ^ h) : h;
+    return use_pc ? (bi.pc ^ h) : h;
   }
 };
 
@@ -373,9 +375,9 @@ public:
     }
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
-    (void)pc;
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
+    (void)bi;
 
     stack[head].update(actual_outcome);
 
@@ -389,9 +391,9 @@ public:
     }
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     uint64_t h = stack[head].hash();
-    return use_pc ? (pc ^ h) : h;
+    return use_pc ? (bi.pc ^ h) : h;
   }
 };
 
@@ -411,14 +413,14 @@ public:
       region_shift = std::stoull(args[0]);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
 
-    bool backward = (pc & 0x80000000) != 0;
+    bool backward = (bi.pc & 0x80000000) != 0;
 
     if (backward && actual_outcome) {
-      uint64_t region = pc >> region_shift;
+      uint64_t region = bi.pc >> region_shift;
       if (region == current_region) {
         counter++;
       } else {
@@ -430,8 +432,8 @@ public:
 
 private:
   size_t region_shift = 8;
-  uint64_t get_index(uint64_t pc) const override {
-    return use_pc ? (pc ^ counter) : counter;
+  uint64_t get_index(const branch_info &bi) const override {
+    return use_pc ? (bi.pc ^ counter) : counter;
   }
 };
 
@@ -452,14 +454,14 @@ public:
       region_shift = std::stoull(args[0]);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
 
-    bool backward = (pc & 0x80000000) != 0;
+    bool backward = (bi.pc & 0x80000000) != 0;
 
     if (backward && actual_outcome) {
-      uint64_t region = pc >> region_shift;
+      uint64_t region = bi.pc >> region_shift;
       if (region == current_region) {
         counter++;
       } else {
@@ -472,8 +474,8 @@ public:
 private:
   size_t region_shift = 8;
 
-  uint64_t get_index(uint64_t pc) const override {
-    return use_pc ? (pc ^ counter) : counter;
+  uint64_t get_index(const branch_info &bi) const override {
+    return use_pc ? (bi.pc ^ counter) : counter;
   }
 };
 
@@ -498,20 +500,20 @@ public:
     history.require(hist_len);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
     (void)actual_outcome;
     // T = PCBR ^ (PCBR >> 2) ^ (PCBR >> 4) ^ (branchTarget >> 1) ^ taken;
     // PATH = ((PCBR ^ (PCBR >> 2))) ^ (branchTarget >> 3);
-    uint64_t pc_br = pc >> 2;
-    uint64_t path = (pc_br ^ (pc_br >> 2)) ^ (target >> (shift + 1));
+    uint64_t pc_br = bi.pc >> 2;
+    uint64_t path = (pc_br ^ (pc_br >> 2)) ^ (bi.target >> (shift + 1));
     history.update(static_cast<uint8_t>(path & 0xFF));
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     uint64_t h = history.get_hash(hist_len);
-    return use_pc ? (pc ^ h) : h;
+    return use_pc ? (bi.pc ^ h) : h;
   }
 };
 
@@ -533,18 +535,18 @@ public:
     history.require(hist_len);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
-    if (actual_outcome && target > pc) {
-      uint64_t entry = (target >> 2) ^ (pc >> 1);
+    if (actual_outcome && bi.target > bi.pc) {
+      uint64_t entry = (bi.target >> 2) ^ (bi.pc >> 1);
       history.update(static_cast<uint8_t>(entry & 0xFF));
     }
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     uint64_t h = history.get_hash(hist_len);
-    return use_pc ? ((pc ^ (pc >> 3)) ^ h) : h;
+    return use_pc ? ((bi.pc ^ (bi.pc >> 3)) ^ h) : h;
   }
 };
 
@@ -566,18 +568,18 @@ public:
     history.require(hist_len);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
-    if (actual_outcome && target < pc) {
-      uint64_t entry = target & 0xFFFF; // SLastBack
+    if (actual_outcome && bi.target < bi.pc) {
+      uint64_t entry = bi.target & 0xFFFF; // SLastBack
       history.update(static_cast<uint8_t>(entry & 0xFF));
     }
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     uint64_t h = history.get_hash(hist_len);
-    return use_pc ? ((pc ^ (pc >> 6)) ^ h) : h;
+    return use_pc ? ((bi.pc ^ (bi.pc >> 6)) ^ h) : h;
   }
 };
 
@@ -604,8 +606,8 @@ public:
     histories.resize(num_entries, 0);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
     // Update history at the PREVIOUS block index
     size_t idx =
@@ -614,15 +616,15 @@ public:
                      ((1ULL << hist_len) - 1);
 
     if (actual_outcome) {
-      last_target_block = target >> 2;
+      last_target_block = bi.target >> 2;
     }
   }
 
-  uint64_t get_index(uint64_t pc) const override {
+  uint64_t get_index(const branch_info &bi) const override {
     size_t idx =
         (last_target_block ^ (last_target_block >> 5)) & (num_entries - 1);
     uint64_t hist = histories[idx];
-    return use_pc ? (pc ^ hash_64(hist)) : hash_64(hist);
+    return use_pc ? (bi.pc ^ hash_64(hist)) : hash_64(hist);
   }
 };
 
@@ -647,22 +649,22 @@ public:
     histories.resize(num_entries, 0);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
-    (void)target;
+    (void)bi.target;
     // get_third_local_index(PC) = ((PC ^ (PC >> 5))) & (NTLOCAL - 1)
-    size_t idx = ((pc ^ (pc >> 5))) & (num_entries - 1);
+    size_t idx = ((bi.pc ^ (bi.pc >> 5))) & (num_entries - 1);
     // Update: ((hist << 1) + taken) ^ (PC & 15)
     histories[idx] =
-        (((histories[idx] << 1) + (actual_outcome ? 1 : 0)) ^ (pc & 15)) &
+        (((histories[idx] << 1) + (actual_outcome ? 1 : 0)) ^ (bi.pc & 15)) &
         ((1ULL << hist_len) - 1);
   }
 
-  uint64_t get_index(uint64_t pc) const override {
-    size_t idx = ((pc ^ (pc >> 5))) & (num_entries - 1);
+  uint64_t get_index(const branch_info &bi) const override {
+    size_t idx = ((bi.pc ^ (bi.pc >> 5))) & (num_entries - 1);
     uint64_t h = hash_64(histories[idx]);
-    return use_pc ? (pc ^ h) : h;
+    return use_pc ? (bi.pc ^ h) : h;
   }
 };
 
@@ -688,13 +690,13 @@ public:
     histories.resize(num_entries, 0);
   }
 
-  void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-              uint64_t target) override {
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
     (void)inst_class;
-    (void)target;
+    (void)bi.target;
 
     // get_fourth_local_index(PC) = ((PC ^ (PC >> 3))) & (NQLOCAL - 1)
-    size_t idx = ((pc ^ (pc >> 3))) & (num_entries - 1);
+    size_t idx = ((bi.pc ^ (bi.pc >> 3))) & (num_entries - 1);
 
     uint64_t update_val = (((gh >> 2) & 3) << 1) + (actual_outcome ? 1 : 0);
     histories[idx] =
@@ -704,9 +706,80 @@ public:
     gh = (gh << 1) | (actual_outcome ? 1 : 0);
   }
 
-  uint64_t get_index(uint64_t pc) const override {
-    size_t idx = ((pc ^ (pc >> 3))) & (num_entries - 1);
+  uint64_t get_index(const branch_info &bi) const override {
+    size_t idx = ((bi.pc ^ (bi.pc >> 3))) & (num_entries - 1);
     uint64_t h = hash_64(histories[idx]);
-    return use_pc ? (pc ^ h) : h;
+    return use_pc ? (bi.pc ^ h) : h;
   }
+};
+
+// ============================================================================
+// TAGE Prediction Features (Fixed Size)
+// ============================================================================
+
+// 4-entry table indexed with (LongestMatchPred, HCPred)
+class TageJointPredFeature : public Feature {
+public:
+  explicit TageJointPredFeature(const std::vector<std::string> &args,
+                                bool _use_pc = true)
+      : Feature(args, _use_pc) {}
+
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
+    (void)inst_class;
+    (void)actual_outcome;
+    (void)bi;
+  }
+
+  uint64_t get_index(const branch_info &bi) const override {
+    // Index is (longestmatchpred << 1) | hcpred -> gives 0,1,2,3
+    uint64_t idx = ((bi.longestmatchpred ? 1 : 0) << 1) | (bi.hcpred ? 1 : 0);
+    return use_pc ? (bi.pc ^ idx) : idx;
+  }
+
+  std::optional<size_t> is_fixed_size() const override { return 4; }
+};
+
+// 2-entry table indexed with LongestMatchPred
+class TageLongestMatchFeature : public Feature {
+public:
+  explicit TageLongestMatchFeature(const std::vector<std::string> &args,
+                                   bool _use_pc = true)
+      : Feature(args, _use_pc) {}
+
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
+    (void)inst_class;
+    (void)actual_outcome;
+    (void)bi;
+  }
+
+  uint64_t get_index(const branch_info &bi) const override {
+    uint64_t idx = bi.longestmatchpred ? 1 : 0;
+    return use_pc ? (bi.pc ^ idx) : idx;
+  }
+
+  std::optional<size_t> is_fixed_size() const override { return 2; }
+};
+
+// 2-entry table indexed with HCPred
+class TageHCPredFeature : public Feature {
+public:
+  explicit TageHCPredFeature(const std::vector<std::string> &args,
+                             bool _use_pc = true)
+      : Feature(args, _use_pc) {}
+
+  void update(InstClass inst_class, bool actual_outcome,
+              const branch_info &bi) override {
+    (void)inst_class;
+    (void)actual_outcome;
+    (void)bi;
+  }
+
+  uint64_t get_index(const branch_info &bi) const override {
+    uint64_t idx = bi.hcpred ? 1 : 0;
+    return use_pc ? (bi.pc ^ idx) : idx;
+  }
+
+  std::optional<size_t> is_fixed_size() const override { return 2; }
 };

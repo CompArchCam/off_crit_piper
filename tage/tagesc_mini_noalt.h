@@ -746,7 +746,8 @@ public:
 
     bool hit_in_last = (HitBank == MINITAGE__NHIST);
 
-    return TagePrediction(pred_taken, confidence, hit_in_last, Provider);
+    return TagePrediction(pred_taken, confidence, hit_in_last, Provider, HCpred,
+                          LongestMatchPred);
   }
 
   void history_update(uint64_t seq_no, uint8_t piece, uint64_t PC, int brtype,

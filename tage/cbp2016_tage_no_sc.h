@@ -484,6 +484,7 @@ public:
   bool tage_pred; // TAGE prediction
   bool alttaken;  // alternate  TAGEprediction
   bool LongestMatchPred;
+  bool HCpred; // high confidence prediction
   int HitBank; // longest matching bank
   int AltBank; // alternate matching bank
   bool pred_inter;
@@ -872,6 +873,7 @@ public:
       alttaken = getbim();
       tage_pred = alttaken;
       LongestMatchPred = alttaken;
+      HCpred = alttaken;
     }
 
     // Look for the bank with longest matching history
@@ -974,8 +976,12 @@ public:
     Tagepred(PC, hist_to_use);
     bool pred_taken = tage_pred;
 #ifndef TAGE64_NO_SC__SC
-    return {tage_pred, get_confidence_level(), HitBank == TAGE64_NO_SC__NHIST,
-            Provider};
+    return {tage_pred,
+            get_confidence_level(),
+            HitBank == TAGE64_NO_SC__NHIST,
+            Provider,
+            alttaken,
+            LongestMatchPred};
 #endif
 
     bool loop_triggered = false;
@@ -1093,7 +1099,8 @@ public:
       }
     }
 
-    return {pred_taken, confidence, HitBank == TAGE64_NO_SC__NHIST, Provider};
+    return {pred_taken, confidence, HitBank == TAGE64_NO_SC__NHIST,
+            Provider,   HCpred,     LongestMatchPred};
   }
 
   void history_update(uint64_t seq_no, uint8_t piece, TAGE64_NO_SC__UINT64 PC,

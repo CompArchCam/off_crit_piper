@@ -1,6 +1,7 @@
 #pragma once
 
 #include "features.h"
+#include "index.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -22,19 +23,32 @@ public:
   size_t get_num_features() const { return features.size(); }
 
   // Update all features with branch outcome
-  void update_features(InstClass inst_class, uint64_t pc, bool actual_outcome,
-                       uint64_t target) {
+  void update_features(InstClass inst_class, bool actual_outcome,
+                       const branch_info &bi) {
     for (auto &f : features) {
-      f->update(inst_class, pc, actual_outcome, target);
+      f->update(inst_class, actual_outcome, bi);
     }
   }
 
-  // Generate indices for all features for a given PC
-  void get_indices(uint64_t pc, std::vector<uint64_t> &out_indices) const {
+  void get_indices(const branch_info &bi,
+                   std::vector<Index> &out_indices) const {
     out_indices.clear();
     out_indices.reserve(features.size());
     for (const auto &f : features) {
-      out_indices.push_back(hash_64(f->get_index(pc)));
+      auto size = f->is_fixed_size();
+      if (size.has_value()) {
+        out_indices.emplace_back(f->get_index(bi), true);
+      } else {
+        out_indices.emplace_back(hash_64(f->get_index(bi)), false);
+      }
     }
+  }
+
+  std::vector<std::optional<uint64_t>> get_sizes() const {
+    std::vector<std::optional<uint64_t>> sizes;
+    for (const auto &f : features) {
+      sizes.push_back(f->is_fixed_size());
+    }
+    return sizes;
   }
 };

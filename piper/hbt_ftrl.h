@@ -4,108 +4,83 @@
 #include <vector>
 
 // FTRL with Hard Branch Table (HBT) gating
+// FTRL with Hard Branch Table (HBT) gating
 class HbtFTRL : public FTRL {
 private:
-  struct HBTEntry {
-    uint8_t misp_counter; // 5-bit saturating counter (0-31)
-    uint64_t tag;         // Partial PC tag for identification
-    bool valid;           // Entry validity flag
+  static constexpr size_t HBT_SIZE = 1024;
+  static constexpr uint64_t HBT_DECAY_PERIOD = 8192;
 
-    HBTEntry() : misp_counter(0), tag(0), valid(false) {}
-  };
-
-  std::vector<HBTEntry> hbt;
-  uint64_t hbt_decay_period;
-  uint8_t hbt_decay_amount;
+  std::vector<uint8_t> hbt_table;
   uint64_t retired_branches;
 
-  uint64_t compute_tag(uint64_t pc) const {
-    // Use upper bits of PC as tag
-    return (pc >> 14) & 0xFFFF;
+  size_t get_hbt_index(uint64_t pc) const { return pc % HBT_SIZE; }
+
+  bool is_hbt_active(uint64_t pc) const {
+    return hbt_table[get_hbt_index(pc)] > 0;
   }
 
-  uint8_t get_hbt_misp_counter(uint64_t pc) const {
-    size_t idx = hash_index(pc);
-    const auto &entry = hbt[idx];
-    return entry.misp_counter;
-  }
-
-  bool is_hbt_active(uint64_t pc) const { return get_hbt_misp_counter(pc) > 0; }
-
-  void update_hbt(uint64_t pc, bool mispredicted, bool hit_in_last) {
-    size_t idx = hash_index(pc);
-    auto &entry = hbt[idx];
-    uint64_t tag = compute_tag(pc);
-
+  void update_hbt(uint64_t pc, bool mispredicted) {
+    size_t idx = get_hbt_index(pc);
     if (mispredicted) {
-      // Allocate new entry or update existing
-      if (entry.tag != tag) {
-        // Only allocate if counter is 0 (allows overwriting old entries)
-        // Only allocate/update if branch hit in last history table
-        if (entry.misp_counter == 0 && hit_in_last) {
-          entry.valid = true;
-          entry.tag = tag;
-          entry.misp_counter = 1;
-        }
-      } else {
-        // Saturate at 31
-        if (entry.misp_counter < 31)
-          entry.misp_counter++;
+      if (hbt_table[idx] < 3) {
+        hbt_table[idx]++;
       }
     }
   }
 
-  void apply_leaky_bucket_hbt() {
-    for (auto &entry : hbt) {
-      if (entry.valid && entry.misp_counter > 0) {
-        uint8_t decrement = std::min(hbt_decay_amount, entry.misp_counter);
-        entry.misp_counter -= decrement;
-        // Invalidate entry if counter reaches 0
-        if (entry.misp_counter == 0) {
-          entry.valid = false;
-        }
-      }
+  void apply_decay() {
+    for (auto &val : hbt_table) {
+      if (val > 0)
+        val--;
     }
   }
 
 public:
-  HbtFTRL(size_t num_features, float _alpha, float _beta, float _l1, float _l2,
-          uint64_t _hbt_decay_period, uint8_t _hbt_decay_amount)
-      : FTRL(num_features, _alpha, _beta, _l1, _l2),
-        hbt_decay_period(_hbt_decay_period),
-        hbt_decay_amount(_hbt_decay_amount), hbt(TABLE_SIZE),
+  HbtFTRL(const std::vector<std::optional<uint64_t>> &feature_sizes,
+          float _alpha, float _beta, float _l1, float _l2,
+          uint64_t _hbt_decay_period_unused, uint8_t _hbt_decay_amount_unused)
+      : FTRL(feature_sizes, _alpha, _beta, _l1, _l2), hbt_table(HBT_SIZE, 0),
         retired_branches(0) {}
 
-  void update(const std::vector<uint64_t> &indices, float pred, bool actual,
-              uint64_t cycle, uint64_t pc,
-              const TagePrediction &tage_pred) override {
+  void update(const std::vector<Index> &indices, float pred, bool actual,
+              uint64_t cycle, uint64_t pc, const TagePrediction &tage_pred,
+              float tage_weight) override {
 
     retired_branches++;
 
     // HBT decay
-    if (retired_branches % hbt_decay_period == 0) {
-      apply_leaky_bucket_hbt();
+    if (retired_branches % HBT_DECAY_PERIOD == 0) {
+      apply_decay();
     }
 
     // 1. Update Hard Branch Table
     bool mispredicted = (tage_pred.prediction != actual);
-    update_hbt(pc, mispredicted, tage_pred.hit_in_last_history_table);
+    update_hbt(pc, mispredicted);
 
-    // 2. FTRL Training Gate - now purely based on HBT being active
+    // 2. FTRL Training Gate
     bool is_hbt = is_hbt_active(pc);
     bool hbt_conf = is_hbt;
 
     if (is_hbt) {
-      float g = pred - (actual ? 1.0f : 0.0f);
+      float ftrl_pred = 0.0;
+      for (size_t i = 0; i < indices.size(); ++i) {
+        uint64_t raw_idx = indices[i].value;
+        auto &table = tables[i];
+        size_t idx = raw_idx % TABLE_SIZE;
+        ftrl_pred +=
+            compute_weight_internal(table.z_table[idx], table.n_table[idx]);
+      }
+
+      float g = ftrl_pred - (actual ? 1.0f : 0.0f);
       float g2 = g * g;
 
       size_t count = std::min(indices.size(), tables.size());
 
       for (size_t i = 0; i < count; ++i) {
-        uint64_t raw_idx = indices[i];
+        uint64_t raw_idx = indices[i].value;
         auto &table = tables[i];
 
-        size_t idx = raw_idx & 0x3FFF;
+        size_t idx = raw_idx % TABLE_SIZE;
 
         float zi = table.z_table[idx];
         float ni = table.n_table[idx];
@@ -121,22 +96,18 @@ public:
     // 3. Weight Synchronization to FSC via HBT check
     size_t count = std::min(indices.size(), tables.size());
     for (size_t i = 0; i < count; ++i) {
-      uint64_t raw_idx = indices[i];
       float weight_to_send = 0.0f;
 
       if (hbt_conf) {
         const auto &table = tables[i];
-        size_t idx = raw_idx & 0x3FFF;
+        size_t idx = indices[i].value % TABLE_SIZE;
         weight_to_send =
             compute_weight_internal(table.z_table[idx], table.n_table[idx]);
       }
 
-      // Push to queue
-      nonzero_weights.push_back({raw_idx, weight_to_send, i, cycle});
+      nonzero_weights.push_back({indices[i], weight_to_send, i, cycle});
     }
   }
 
-  size_t size_bytes() const override {
-    return FTRL::size_bytes() + hbt.size() * sizeof(HBTEntry);
-  }
+  size_t size_bits() const { return FTRL::size_bytes() * 8 + HBT_SIZE * 2; }
 };

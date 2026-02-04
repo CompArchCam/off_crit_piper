@@ -2,8 +2,17 @@
 
 #include "../lib/sim_common_structs.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
+
+struct branch_info {
+  uint64_t pc;
+  uint64_t target;
+  bool tage_conf;        // High confidence from TAGE
+  bool hcpred;           // TAGE high confidence prediction
+  bool longestmatchpred; // TAGE longest match prediction
+};
 
 /**
  * Abstract base class for FTRP_P features.
@@ -36,20 +45,22 @@ public:
    * Called when a branch is resolved to train the feature.
    *
    * @param inst_class  Instruction class of the branch
-   * @param pc          Program counter of the branch
    * @param actual_outcome Actual outcome (true for taken, false for not-taken)
+   * @param bi          Branch info containing PC, target, etc.
    */
-  virtual void update(InstClass inst_class, uint64_t pc, bool actual_outcome,
-                      uint64_t target) = 0;
+  virtual void update(InstClass inst_class, bool actual_outcome,
+                      const branch_info &bi) = 0;
 
   /**
    * Get the index into the prediction table for a given program counter.
    * This index is used to look up the prediction weight/value for this feature.
    *
-   * @param pc Program counter of the branch to predict
+   * @param bi Branch info containing PC, target, etc.
    * @return uint64_t Index into the feature's prediction table
    */
-  virtual uint64_t get_index(uint64_t pc) const = 0;
+  virtual uint64_t get_index(const branch_info &bi) const = 0;
+
+  virtual std::optional<size_t> is_fixed_size() const { return std::nullopt; }
 
 protected:
   // Derived classes can add their own state here

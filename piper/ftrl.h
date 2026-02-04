@@ -1,14 +1,16 @@
 #pragma once
 
 #include "../tage/tage_prediction.h"
+#include "index.h"
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
 struct ActiveWeight {
-  uint64_t hash; // The raw feature index/hash provided by GetIndex
+  Index index;
   float weight;
   size_t feature_idx;
   uint64_t cycle;
@@ -27,7 +29,7 @@ protected:
   std::vector<TableState> tables;
   std::deque<ActiveWeight> nonzero_weights;
 
-  static const size_t TABLE_SIZE = 1 << 14; // 16K entries
+  static constexpr size_t TABLE_SIZE{1 << 14};
 
   float alpha;
   float beta;
@@ -45,24 +47,24 @@ protected:
   uint64_t hash_index(uint64_t pc) const { return pc & (TABLE_SIZE - 1); }
 
 public:
-  FTRL(size_t num_features, float _alpha, float _beta, float _l1, float _l2)
+  FTRL(const std::vector<std::optional<uint64_t>> &feature_sizes, float _alpha,
+       float _beta, float _l1, float _l2)
       : alpha(_alpha), beta(_beta), l1(_l1), l2(_l2) {
     if (alpha <= 0.0f)
       throw std::runtime_error("FTRL alpha must be > 0");
-    tables.reserve(num_features);
-    size_t fixed_size = TABLE_SIZE;
-    for (size_t i = 0; i < num_features; ++i) {
-      tables.emplace_back(fixed_size);
+
+    tables.reserve(feature_sizes.size());
+
+    for (const auto &size : feature_sizes) {
+      tables.emplace_back(size.has_value() ? size.value() : TABLE_SIZE);
     }
   }
 
   virtual ~FTRL() = default;
 
-  // Update weights based on indices provided by IndexManager
-  // Requires TagePrediction for feedback
-  virtual void update(const std::vector<uint64_t> &indices, float pred,
+  virtual void update(const std::vector<Index> &indices, float pred,
                       bool actual, uint64_t cycle, uint64_t pc,
-                      const TagePrediction &tage_pred) = 0;
+                      const TagePrediction &tage_pred, float tage_weight) = 0;
 
   const std::deque<ActiveWeight> &get_nonzero_weights() const {
     return nonzero_weights;

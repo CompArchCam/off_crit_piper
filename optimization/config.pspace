@@ -72,5 +72,3 @@ features_hbt
 
 # QLHist (Fourth Local History)
 {optional ENABLE_QLHIST_0 QLHist {int 4 16} {int 8 32}}
-
-features_many_branches
